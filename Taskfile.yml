@@ -1,0 +1,55 @@
+version: '3'
+
+tasks:
+  default:
+    desc: List tasks
+    cmds: ['task --list']
+
+  # --- bootstrap ---
+  install:
+    desc: Install all deps (Rust crates fetch + Bun deps)
+    cmds:
+      - cargo fetch
+      - bun install
+
+  # --- dev ---
+  dev:
+    desc: Run demo with e2e feature (Step 2 以降で意味を持つ)
+    cmds: [cargo run -p gtk4-e2e-demo --features e2e]
+
+  gen:types:
+    desc: Regenerate TS types from Rust (Step 3 以降で意味を持つ)
+    cmds: [cargo build -p gtk4-e2e-server --features e2e]
+
+  # --- check ---
+  fmt:
+    desc: Format Rust + TS
+    cmds:
+      - cargo fmt --all
+      - bun run --filter '*' fmt || true   # Step 4 以降で実装
+
+  fmt:check:
+    desc: Format check (CI-friendly)
+    cmds:
+      - cargo fmt --all -- --check
+      - bun run --filter '*' fmt:check || true
+
+  lint:
+    desc: Lint Rust + TS
+    cmds:
+      - cargo clippy --all-targets --all-features -- -D warnings
+      - bun run --filter '*' lint || true
+
+  test:
+    desc: Run all tests
+    cmds:
+      - cargo test --all
+      - bun test --pass-with-no-tests
+
+  test:demo:
+    desc: Run demo scenarios (Step 6 以降)
+    cmds: [bun test packages/demo/scenarios]
+
+  ci:
+    desc: Local CI emulation
+    deps: [fmt:check, lint, test]

@@ -1,0 +1,16 @@
+{
+  "lockfileVersion": 1,
+  "configVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "gtk4-e2e-monorepo",
+    },
+    "packages/client": {
+      "name": "gtk4-e2e",
+      "version": "0.0.0",
+    },
+  },
+  "packages": {
+    "gtk4-e2e": ["gtk4-e2e@workspace:packages/client"],
+  }
+}

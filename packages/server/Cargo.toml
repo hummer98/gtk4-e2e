@@ -1,0 +1,9 @@
+[package]
+name = "gtk4-e2e-server"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Placeholder; real implementation lands in Step 1."
+
+[lib]
+path = "src/lib.rs"

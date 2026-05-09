@@ -26,3 +26,17 @@ packages/server/proto/schemas/
 test-results/
 recordings/
 screenshots/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Coverage
+coverage/
+
+# Bun runtime tmp
+.bun-cache/
