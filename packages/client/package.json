@@ -3,13 +3,20 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Placeholder; real SDK lands in Step 4.",
+  "description": "TS SDK + CLI for the gtk4-e2e in-process server.",
+  "bin": { "gtk4-e2e": "./src/cli.ts" },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": { "import": "./src/index.ts", "types": "./src/index.ts" }
+  },
   "scripts": {
     "lint": "exit 0",
     "fmt:check": "exit 0",
+    "test": "bun test",
     "gen:types": "cargo run -p gtk4-e2e-server --example gen-schemas --features e2e && bun scripts/gen-types.ts"
   },
   "devDependencies": {
-    "json-schema-to-typescript": "^15"
+    "json-schema-to-typescript": "^15",
+    "@types/bun": "^1"
   }
 }

@@ -1,0 +1,276 @@
+import "./_setup.ts";
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { E2EClient } from "../src/client.ts";
+import { HttpError, NotImplementedError } from "../src/errors.ts";
+import type { Info } from "../src/types.gen.ts";
+
+interface MockServer {
+  baseUrl: string;
+  receivedAuth: string[];
+  receivedBodies: Array<{ path: string; method: string; body: unknown }>;
+  stop(): Promise<void>;
+}
+
+function pngBytes(): Uint8Array {
+  // Minimal PNG: 8-byte magic + IHDR + IDAT + IEND. Just enough for a magic byte
+  // smoke check; the SDK does not parse the payload.
+  return new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+    0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+    0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+  ]);
+}
+
+interface RouteHandlers {
+  info?: () => Response | Promise<Response>;
+  tap?: (body: unknown) => Response | Promise<Response>;
+  screenshot?: () => Response | Promise<Response>;
+}
+
+function startMock(handlers: RouteHandlers): MockServer {
+  const receivedAuth: string[] = [];
+  const receivedBodies: Array<{ path: string; method: string; body: unknown }> = [];
+
+  const server = Bun.serve({
+    port: 0,
+    async fetch(req) {
+      const url = new URL(req.url);
+      receivedAuth.push(req.headers.get("authorization") ?? "");
+
+      let body: unknown = null;
+      if (req.method !== "GET" && req.headers.get("content-type")?.includes("application/json")) {
+        try {
+          body = await req.json();
+        } catch {
+          body = null;
+        }
+      }
+      receivedBodies.push({ path: url.pathname, method: req.method, body });
+
+      if (url.pathname === "/test/info" && handlers.info) return handlers.info();
+      if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
+      if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
+      return new Response("not found", { status: 404 });
+    },
+  });
+
+  return {
+    baseUrl: `http://127.0.0.1:${server.port}`,
+    receivedAuth,
+    receivedBodies,
+    async stop() {
+      await server.stop(true);
+    },
+  };
+}
+
+const sampleInfo: Info = {
+  instance_id: "abc",
+  pid: 4242,
+  port: 19042,
+  app_name: "gtk4-e2e-app",
+  app_version: "0.1.0",
+  capabilities: ["info"],
+};
+
+describe("E2EClient.getInfo", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("parses /test/info JSON", async () => {
+    mock = startMock({
+      info: () => Response.json(sampleInfo),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    const got = await client.getInfo();
+    expect(got).toEqual(sampleInfo);
+  });
+
+  test("sends Authorization: Bearer <token> when token is set", async () => {
+    mock = startMock({
+      info: () => Response.json(sampleInfo),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl, token: "secret" });
+    await client.getInfo();
+    expect(mock.receivedAuth.at(-1)).toBe("Bearer secret");
+  });
+
+  test("omits Authorization when token is unset", async () => {
+    mock = startMock({
+      info: () => Response.json(sampleInfo),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.getInfo();
+    expect(mock.receivedAuth.at(-1)).toBe("");
+  });
+});
+
+describe("E2EClient.tap", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector} for string target", async () => {
+    mock = startMock({
+      tap: () => new Response(null, { status: 204 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.tap("#submit");
+
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.method).toBe("POST");
+    expect(last?.path).toBe("/test/tap");
+    expect(last?.body).toEqual({ selector: "#submit" });
+  });
+
+  test("sends {xy:{x,y}} for coordinate target", async () => {
+    mock = startMock({
+      tap: () => new Response(null, { status: 204 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.tap({ x: 1, y: 2 });
+
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({ xy: { x: 1, y: 2 } });
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      tap: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "tap" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await expect(client.tap("#x")).rejects.toMatchObject({
+      name: "NotImplementedError",
+      capability: "tap",
+      status: 501,
+    });
+  });
+
+  test("throws NotImplementedError on 404", async () => {
+    mock = startMock({
+      tap: () => new Response("not found", { status: 404 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.tap("#x");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NotImplementedError);
+    expect((thrown as NotImplementedError).status).toBe(404);
+  });
+
+  test("throws HttpError on 500", async () => {
+    mock = startMock({
+      tap: () => new Response("boom", { status: 500 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.tap("#x");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(500);
+  });
+});
+
+describe("E2EClient.screenshot", () => {
+  let mock: MockServer;
+  let scratch: string;
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), "gtk4-e2e-shot-"));
+  });
+
+  afterEach(async () => {
+    await mock.stop();
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  test("returns Uint8Array of PNG bytes when no path given", async () => {
+    const png = pngBytes();
+    mock = startMock({
+      screenshot: () =>
+        new Response(png, {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    const got = await client.screenshot();
+    expect(got).toBeInstanceOf(Uint8Array);
+    expect(got[0]).toBe(0x89);
+    expect(got[1]).toBe(0x50);
+    expect(got[2]).toBe(0x4e);
+    expect(got[3]).toBe(0x47);
+  });
+
+  test("writes file and returns path when path given", async () => {
+    const png = pngBytes();
+    mock = startMock({
+      screenshot: () =>
+        new Response(png, {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    });
+
+    const out = join(scratch, "out.png");
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    const returned = await client.screenshot(out);
+    expect(returned).toBe(out);
+
+    const written = await Bun.file(out).bytes();
+    expect(written[0]).toBe(0x89);
+    expect(written.byteLength).toBe(png.byteLength);
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      screenshot: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "screenshot" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.screenshot();
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(NotImplementedError);
+    expect((thrown as NotImplementedError).capability).toBe("screenshot");
+    expect((thrown as NotImplementedError).status).toBe(501);
+  });
+});
