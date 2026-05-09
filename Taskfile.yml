@@ -18,8 +18,8 @@ tasks:
     cmds: [cargo run -p gtk4-e2e-demo --features e2e]
 
   gen:types:
-    desc: Regenerate TS types from Rust (Step 3 以降で意味を持つ)
-    cmds: [cargo build -p gtk4-e2e-server --features e2e]
+    desc: Regenerate JSON Schemas + TS types from proto.rs (ADR-0002)
+    cmds: [bun run gen:types]
 
   # --- check ---
   fmt:

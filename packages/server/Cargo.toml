@@ -39,3 +39,7 @@ e2e = [
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "gen-schemas"
+required-features = ["e2e"]

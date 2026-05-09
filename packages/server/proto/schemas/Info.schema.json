@@ -1,0 +1,57 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Capability": {
+      "description": "Capability identifiers advertised in `Info.capabilities`. Step 1 only surfaces `Info`; further variants land in subsequent steps.",
+      "enum": [
+        "info"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Response payload of `GET /test/info`.",
+  "properties": {
+    "app_name": {
+      "type": "string"
+    },
+    "app_version": {
+      "type": "string"
+    },
+    "capabilities": {
+      "items": {
+        "$ref": "#/definitions/Capability"
+      },
+      "type": "array"
+    },
+    "instance_id": {
+      "type": "string"
+    },
+    "pid": {
+      "format": "uint32",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "port": {
+      "format": "uint16",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "token_required": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "app_name",
+    "app_version",
+    "capabilities",
+    "instance_id",
+    "pid",
+    "port"
+  ],
+  "title": "Info",
+  "type": "object"
+}

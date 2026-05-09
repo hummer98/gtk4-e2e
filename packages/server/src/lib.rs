@@ -14,6 +14,8 @@ mod port;
 mod proto;
 #[cfg(feature = "e2e")]
 mod registry;
+#[cfg(feature = "e2e")]
+mod schema_export;
 
 #[cfg(feature = "e2e")]
 pub use gtk4 as gtk;
@@ -23,6 +25,9 @@ pub use crate::proto::{Capability, Info};
 
 #[cfg(feature = "e2e")]
 pub use crate::registry::{runtime_dir, InstanceFile, REGISTRY_SUBDIR};
+
+#[cfg(feature = "e2e")]
+pub use crate::schema_export::write_schemas;
 
 #[cfg(feature = "e2e")]
 pub use crate::start_impl::{start, Handle};

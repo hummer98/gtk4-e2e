@@ -1,0 +1,47 @@
+//! JSON Schema exporter — proto.rs SSOT → `*.schema.json` artifacts.
+//!
+//! Backs ADR-0002: schemars output is committed and acts as the stale-check
+//! anchor; TS types are derived from these files via
+//! `packages/client/scripts/gen-types.ts`. The exporter is feature-gated
+//! (`e2e`) so default builds remain free of `schemars`/`serde_json`.
+
+use std::fs;
+use std::io;
+use std::path::Path;
+
+use schemars::{schema_for, JsonSchema};
+use serde_json::Value;
+
+use crate::proto::{Capability, Info};
+
+const PROVENANCE: &str = "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand";
+
+/// Emit `Info.schema.json` and `Capability.schema.json` into `out_dir`.
+///
+/// Each file is pretty-printed JSON (2-space indent), terminates with a single
+/// LF, and carries a top-level `$comment` referencing the SSOT.
+pub fn write_schemas(out_dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(out_dir)?;
+    write_one::<Info>(out_dir, "Info")?;
+    write_one::<Capability>(out_dir, "Capability")?;
+    Ok(())
+}
+
+fn write_one<T: JsonSchema>(out_dir: &Path, name: &str) -> io::Result<()> {
+    let schema = schema_for!(T);
+    let mut value = serde_json::to_value(&schema).map_err(io::Error::other)?;
+    if let Value::Object(ref mut map) = value {
+        map.insert("$comment".into(), Value::String(PROVENANCE.into()));
+    } else {
+        return Err(io::Error::other(format!(
+            "schema for {name} was not a JSON object"
+        )));
+    }
+
+    let mut bytes = serde_json::to_vec_pretty(&value).map_err(io::Error::other)?;
+    bytes.push(b'\n');
+
+    let path = out_dir.join(format!("{name}.schema.json"));
+    fs::write(&path, bytes)?;
+    Ok(())
+}

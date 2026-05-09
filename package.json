@@ -7,6 +7,7 @@
   "scripts": {
     "lint": "bun run --filter '*' lint",
     "fmt:check": "bun run --filter '*' fmt:check",
-    "test": "bun test --pass-with-no-tests"
+    "test": "bun test --pass-with-no-tests",
+    "gen:types": "bun run --filter 'gtk4-e2e' gen:types"
   }
 }

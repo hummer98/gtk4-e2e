@@ -17,6 +17,7 @@
 | # | タイトル | Status | 信頼度 |
 |---|---|---|---|
 | [0001](./0001-architecture.md) | Architecture — In-process Rust server + Bun/TypeScript client + demo app | Accepted | 中 (70%) |
+| [0002](./0002-codegen-pipeline.md) | Codegen pipeline — schemars → JSON Schema (committed) → json-schema-to-typescript | Proposed | 中 (75%) |
 
 ## ADR 運用ルール
 
