@@ -3,7 +3,39 @@ name = "gtk4-e2e-server"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Placeholder; real implementation lands in Step 1."
+description = "In-process e2e test server for GTK4 + Rust apps. Step 1 spike."
 
 [lib]
 path = "src/lib.rs"
+
+[dependencies]
+gtk4 = { version = "0.9", optional = true, default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"], optional = true }
+axum = { version = "0.7", optional = true }
+serde = { version = "1", features = ["derive"], optional = true }
+serde_json = { version = "1", optional = true }
+schemars = { version = "0.8", optional = true }
+uuid = { version = "1", features = ["v4"], optional = true }
+rand = { version = "0.8", optional = true }
+anyhow = { version = "1", optional = true }
+thiserror = { version = "1", optional = true }
+time = { version = "0.3", features = ["formatting", "macros"], optional = true }
+
+[features]
+default = []
+e2e = [
+    "dep:gtk4",
+    "dep:tokio",
+    "dep:axum",
+    "dep:serde",
+    "dep:serde_json",
+    "dep:schemars",
+    "dep:uuid",
+    "dep:rand",
+    "dep:anyhow",
+    "dep:thiserror",
+    "dep:time",
+]
+
+[dev-dependencies]
+tempfile = "3"
