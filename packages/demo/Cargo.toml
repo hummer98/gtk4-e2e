@@ -3,8 +3,16 @@ name = "gtk4-e2e-demo"
 version = "0.0.0"
 edition = "2021"
 publish = false
-description = "Placeholder; real GTK4 demo binary lands in Step 2."
+description = "Minimal GTK4 app embedding gtk4-e2e-server. Reference fixture for develop/CI."
 
 [[bin]]
 name = "gtk4-e2e-demo"
 path = "src/main.rs"
+
+[dependencies]
+gtk4 = { version = "0.9", default-features = false }
+gtk4-e2e-server = { path = "../server", optional = true }
+
+[features]
+default = []
+e2e = ["dep:gtk4-e2e-server", "gtk4-e2e-server/e2e"]
