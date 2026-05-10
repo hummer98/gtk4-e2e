@@ -1,8 +1,8 @@
 # ADR-0002: Codegen pipeline — schemars → JSON Schema (committed) → json-schema-to-typescript
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-05-11, after Round 1–3 production use across T004 / T013 / T014 / T015 / T018 / T019)
 - **Date**: 2026-05-10
-- **Confidence**: 中 (75%) — Step 3 で実装、Step 4 着手時の使用感で再評価
+- **Confidence**: 高 (90%) — Round 1 で実装後、Round 2/3 で 6 タスク (type / swipe / pinch / elements / state / app_state_eq) が同パイプラインで proto 拡張に成功、stale check も期待通り作動。`InstanceFile` の SSOT 化のみ未解決として残置。
 
 ## Context
 
