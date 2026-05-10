@@ -120,6 +120,42 @@ await r.start();
 await r.stop();
 ```
 
+## Visual regression (screenshot diff)
+
+Compare a freshly-captured screenshot against a baseline PNG using pixelmatch
+(see ADR-0003). Threshold defaults to 0.1 (pixelmatch native).
+
+```bash
+# Diff against a baseline. Exits 0 on match, 1 on mismatch.
+# The baseline file actually consulted is `<dirname(<path>)>/<name>.png`.
+bunx gtk4-e2e screenshot main-window --baseline ./baselines/main-window.png
+
+# Override the per-pixel YIQ threshold (0.0 = strict, 1.0 = lenient; both bounds inclusive).
+bunx gtk4-e2e screenshot main-window --baseline ./baselines/x.png --threshold 0.2
+
+# Create or overwrite the baseline with the current screenshot.
+bunx gtk4-e2e screenshot main-window --baseline ./baselines/x.png --update-baseline
+```
+
+The `<path>` argument supplies **only the directory** that holds baselines.
+The actual file consulted is `<dirname(<path>)>/<name>.png`, where `<name>` is
+the positional. So `--baseline ./baselines/foo.png main-window` looks for
+`./baselines/main-window.png` and ignores the `foo.png` part. If you don't have
+a strong opinion on the path, pass `./baselines/<name>.png` (or any sibling
+filename in the right directory).
+
+The CLI prints a JSON report (the SDK's `VisualDiffResult` plus the `name` you
+passed) to stdout. On mismatch, `<dir>/<name>.actual.png` and (when sizes
+match) `<dir>/<name>.diff.png` are written next to the baseline.
+
+Exit codes specific to this subcommand:
+
+- `0` match
+- `1` mismatch
+- `2` invalid argv (missing `--baseline` value, `--threshold` out of range, `--update-baseline` without `--baseline`, ...)
+- `5` HttpError (server failed to capture a screenshot)
+- `7` VisualDiffError (baseline missing without `--update-baseline`, or PNG decode failure)
+
 ## Recorded demo run
 
 A full-run recording drives all demo scenarios end-to-end and writes the

@@ -8,8 +8,11 @@
 //   4  DiscoveryError
 //   5  HttpError
 //   6  RecorderError (Step 8)
+//   7  VisualDiffError (Step 19; baseline_missing or decode_failed)
 //
 // The argv parser is hand-rolled to avoid a dependency.
+
+import { dirname, resolve } from "node:path";
 
 import { E2EClient } from "./client.ts";
 import { discover } from "./discover.ts";
@@ -19,6 +22,7 @@ import {
   HttpError,
   NotImplementedError,
   RecorderError,
+  VisualDiffError,
 } from "./errors.ts";
 import { Recorder } from "./recorder.ts";
 
@@ -30,7 +34,9 @@ Subcommands:
   type <selector> <text>            POST /test/type
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
-  screenshot <out.png>              GET /test/screenshot → save to file
+  screenshot <out.png>                                 GET /test/screenshot → save to file
+  screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
+                  [--threshold <0.0-1.0>] [--update-baseline]
   elements [--selector <s>] [--max-depth <n>]
                                     GET /test/elements → JSON tree to stdout
   record start --output <path>      start ffmpeg recording (X11 only in MVP)
@@ -66,6 +72,9 @@ interface ParsedArgs {
     duration?: number;
     selector?: string;
     maxDepth?: number;
+    baseline?: string;
+    updateBaseline: boolean;
+    threshold?: number;
     verbose: boolean;
     help: boolean;
   };
@@ -75,7 +84,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = {
     subcommand: null,
     positional: [],
-    flags: { help: false, verbose: false },
+    flags: { help: false, verbose: false, updateBaseline: false },
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -161,6 +170,25 @@ function parseArgs(argv: string[]): ParsedArgs {
       result.flags.maxDepth = n;
       continue;
     }
+    if (a === "--baseline") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--baseline requires a value");
+      result.flags.baseline = v;
+      continue;
+    }
+    if (a === "--update-baseline") {
+      result.flags.updateBaseline = true;
+      continue;
+    }
+    if (a === "--threshold") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--threshold requires a value");
+      const n = Number.parseFloat(v);
+      if (!Number.isFinite(n) || n < 0 || n > 1)
+        throw new ArgvError(`--threshold: not in [0.0, 1.0]: ${v}`);
+      result.flags.threshold = n;
+      continue;
+    }
     if (a.startsWith("--")) {
       throw new ArgvError(`unknown flag: ${a}`);
     }
@@ -169,6 +197,18 @@ function parseArgs(argv: string[]): ParsedArgs {
     } else {
       result.positional.push(a);
     }
+  }
+
+  // Cross-flag validation (centralized here to keep `runScreenshot` from
+  // re-checking; see plan §2.1.5). `--update-baseline` only makes sense in
+  // diff mode, which requires `--baseline`. Guarded by subcommand so other
+  // subcommands ignore the flag like they ignore other unrelated flags.
+  if (
+    result.subcommand === "screenshot" &&
+    result.flags.updateBaseline === true &&
+    result.flags.baseline === undefined
+  ) {
+    throw new ArgvError("--update-baseline requires --baseline <path>");
   }
 
   return result;
@@ -280,14 +320,32 @@ async function runElements(parsed: ParsedArgs): Promise<void> {
   process.stdout.write(`${JSON.stringify(resp, null, 2)}\n`);
 }
 
-async function runScreenshot(parsed: ParsedArgs): Promise<void> {
+async function runScreenshot(parsed: ParsedArgs): Promise<number> {
   if (parsed.positional.length === 0) {
-    throw new ArgvError("screenshot requires an output path");
+    throw new ArgvError("screenshot requires <out.png> or <name> --baseline <path>");
   }
-  const out = parsed.positional[0];
+  const positional = parsed.positional[0];
   const client = await buildClient(parsed);
-  const path = await client.screenshot(out);
-  process.stdout.write(`${path}\n`);
+
+  // Save mode: backward-compatible (positional is treated as the output path).
+  const baseline = parsed.flags.baseline;
+  if (baseline === undefined) {
+    const path = await client.screenshot(positional);
+    process.stdout.write(`${path}\n`);
+    return 0;
+  }
+
+  // Diff mode: positional is the SDK `name`; `--baseline <path>` supplies
+  // only the directory (its basename / suffix is intentionally ignored — see
+  // plan §Q1 sub-decision).
+  const baselineDir = dirname(resolve(process.cwd(), baseline));
+  const result = await client.expectScreenshot(positional, {
+    baselineDir,
+    threshold: parsed.flags.threshold,
+    updateBaseline: parsed.flags.updateBaseline,
+  });
+  process.stdout.write(`${JSON.stringify({ name: positional, ...result }, null, 2)}\n`);
+  return result.match ? 0 : 1;
 }
 
 function buildRecorderFromEnv(parsed: ParsedArgs, output: string): Recorder {
@@ -387,8 +445,7 @@ async function main(argv: string[]): Promise<number> {
         await runPinch(parsed);
         return 0;
       case "screenshot":
-        await runScreenshot(parsed);
-        return 0;
+        return await runScreenshot(parsed);
       case "elements":
         await runElements(parsed);
         return 0;
@@ -418,6 +475,10 @@ async function main(argv: string[]): Promise<number> {
     if (err instanceof RecorderError) {
       process.stderr.write(`${err.message}\n`);
       return 6;
+    }
+    if (err instanceof VisualDiffError) {
+      process.stderr.write(`${err.message}\n`);
+      return 7;
     }
     if (err instanceof E2EError) {
       process.stderr.write(`${err.message}\n`);

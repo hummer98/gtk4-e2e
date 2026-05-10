@@ -1,12 +1,52 @@
 import "./_setup.ts";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { PNG } from "pngjs";
+
 import type { Info } from "../src/types.gen.ts";
+
+// Inline PNG helpers (copy of visualDiff.test.ts equivalents) — plan §Q7.
+function makePng(
+  width: number,
+  height: number,
+  rgba: [number, number, number, number],
+): Uint8Array {
+  const png = new PNG({ width, height });
+  for (let i = 0; i < width * height; i++) {
+    png.data[i * 4 + 0] = rgba[0];
+    png.data[i * 4 + 1] = rgba[1];
+    png.data[i * 4 + 2] = rgba[2];
+    png.data[i * 4 + 3] = rgba[3];
+  }
+  return new Uint8Array(PNG.sync.write(png));
+}
+
+function makePngWith1pxDiff(
+  width: number,
+  height: number,
+  baseRgba: [number, number, number, number],
+  px: number,
+  py: number,
+  pixelRgba: [number, number, number, number],
+): Uint8Array {
+  const png = new PNG({ width, height });
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const idx = (y * width + x) * 4;
+      const rgba = x === px && y === py ? pixelRgba : baseRgba;
+      png.data[idx + 0] = rgba[0];
+      png.data[idx + 1] = rgba[1];
+      png.data[idx + 2] = rgba[2];
+      png.data[idx + 3] = rgba[3];
+    }
+  }
+  return new Uint8Array(PNG.sync.write(png));
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(HERE, "..", "..", "..");
@@ -324,6 +364,375 @@ describe("cli screenshot", () => {
   });
 });
 
+describe("cli screenshot --baseline (visual diff)", () => {
+  let mock: MockServer | undefined;
+  let scratch: string;
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), "gtk4-e2e-cli-vdiff-"));
+    mock = undefined;
+  });
+
+  afterEach(async () => {
+    if (mock !== undefined) {
+      await mock.stop();
+    }
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  test("match: actual === baseline → exit 0, JSON match=true", async () => {
+    const png = makePng(10, 10, [255, 0, 0, 255]);
+    await Bun.write(join(scratch, "main-window.png"), png);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(png, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    // Note: --baseline path's basename ("ignored") is intentionally different
+    // from the positional <name>; the SDK should look at <dirname>/main-window.png.
+    const result = await runCli([
+      "screenshot",
+      "main-window",
+      "--baseline",
+      join(scratch, "ignored.png"),
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      name: string;
+      match: boolean;
+      diffPixels: number;
+    };
+    expect(parsed.name).toBe("main-window");
+    expect(parsed.match).toBe(true);
+    expect(parsed.diffPixels).toBe(0);
+  });
+
+  test("mismatch: 1px diff → exit 1, diff PNG written next to baseline", async () => {
+    const baseline = makePng(10, 10, [255, 0, 0, 255]);
+    const actual = makePngWith1pxDiff(10, 10, [255, 0, 0, 255], 5, 5, [0, 255, 0, 255]);
+    await Bun.write(join(scratch, "main-window.png"), baseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(actual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "main-window",
+      "--baseline",
+      join(scratch, "main-window.png"),
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      name: string;
+      match: boolean;
+      diffPixels: number;
+      diffPath?: string;
+    };
+    expect(parsed.match).toBe(false);
+    expect(parsed.diffPixels).toBeGreaterThanOrEqual(1);
+    expect(existsSync(join(scratch, "main-window.diff.png"))).toBe(true);
+  });
+
+  test("size mismatch → exit 1, actual PNG written, no diff PNG", async () => {
+    const baseline = makePng(10, 10, [255, 0, 0, 255]);
+    const actual = makePng(20, 20, [255, 0, 0, 255]);
+    await Bun.write(join(scratch, "main-window.png"), baseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(actual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "main-window",
+      "--baseline",
+      join(scratch, "main-window.png"),
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as {
+      match: boolean;
+      diffPath?: string;
+    };
+    expect(parsed.match).toBe(false);
+    expect(parsed.diffPath).toBeUndefined();
+    expect(existsSync(join(scratch, "main-window.actual.png"))).toBe(true);
+    expect(existsSync(join(scratch, "main-window.diff.png"))).toBe(false);
+  });
+
+  test("baseline missing → exit 7 (VisualDiffError)", async () => {
+    const actual = makePng(5, 5, [0, 255, 0, 255]);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(actual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "missing",
+      "--baseline",
+      join(scratch, "missing.png"),
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(7);
+    expect(result.stderr).toContain("baseline PNG not found");
+  });
+
+  test("--update-baseline creates baseline when absent → exit 0", async () => {
+    const actual = makePng(5, 5, [0, 255, 0, 255]);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(actual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "fresh",
+      "--baseline",
+      join(scratch, "fresh.png"),
+      "--update-baseline",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { match: boolean };
+    expect(parsed.match).toBe(true);
+    const written = await Bun.file(join(scratch, "fresh.png")).bytes();
+    expect(written.byteLength).toBe(actual.byteLength);
+    expect(Buffer.from(written).equals(Buffer.from(actual))).toBe(true);
+  });
+
+  test("--update-baseline overwrites existing baseline → exit 0", async () => {
+    const oldBaseline = makePng(5, 5, [255, 0, 0, 255]);
+    const newActual = makePng(5, 5, [0, 0, 255, 255]);
+    await Bun.write(join(scratch, "shot.png"), oldBaseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(newActual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "shot",
+      "--baseline",
+      join(scratch, "shot.png"),
+      "--update-baseline",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    const written = await Bun.file(join(scratch, "shot.png")).bytes();
+    expect(Buffer.from(written).equals(Buffer.from(newActual))).toBe(true);
+  });
+
+  test("--threshold 0.0 (strict) flags subtle RGB shift as mismatch", async () => {
+    const baseline = makePng(2, 2, [200, 100, 100, 255]);
+    const actual = makePngWith1pxDiff(2, 2, [200, 100, 100, 255], 0, 0, [210, 110, 110, 255]);
+    await Bun.write(join(scratch, "subtle.png"), baseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(actual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "subtle",
+      "--baseline",
+      join(scratch, "subtle.png"),
+      "--threshold",
+      "0.0",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(1);
+    const parsed = JSON.parse(result.stdout) as { match: boolean };
+    expect(parsed.match).toBe(false);
+  });
+
+  test("--threshold 1.0 (lenient) accepts subtle RGB shift as match", async () => {
+    const baseline = makePng(2, 2, [200, 100, 100, 255]);
+    const actual = makePngWith1pxDiff(2, 2, [200, 100, 100, 255], 0, 0, [210, 110, 110, 255]);
+    await Bun.write(join(scratch, "lenient.png"), baseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(actual, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "lenient",
+      "--baseline",
+      join(scratch, "lenient.png"),
+      "--threshold",
+      "1.0",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { match: boolean };
+    expect(parsed.match).toBe(true);
+  });
+
+  test("--threshold -0.1 → exit 2 (out of range)", async () => {
+    const result = await runCli([
+      "screenshot",
+      "x",
+      "--baseline",
+      join(scratch, "x.png"),
+      "--threshold",
+      "-0.1",
+    ]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("not in [0.0, 1.0]");
+  });
+
+  test("--threshold 1.5 → exit 2 (out of range)", async () => {
+    const result = await runCli([
+      "screenshot",
+      "x",
+      "--baseline",
+      join(scratch, "x.png"),
+      "--threshold",
+      "1.5",
+    ]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("not in [0.0, 1.0]");
+  });
+
+  test("--threshold abc → exit 2 (unparsable)", async () => {
+    const result = await runCli([
+      "screenshot",
+      "x",
+      "--baseline",
+      join(scratch, "x.png"),
+      "--threshold",
+      "abc",
+    ]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("not in [0.0, 1.0]");
+  });
+
+  test("--baseline missing value → exit 2", async () => {
+    const result = await runCli(["screenshot", "x", "--baseline"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--baseline requires a value");
+  });
+
+  test("--update-baseline alone (no --baseline) → exit 2", async () => {
+    const result = await runCli(["screenshot", "x", "--update-baseline"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--update-baseline requires --baseline");
+  });
+
+  test("server 5xx (HttpError) → exit 5", async () => {
+    mock = startMock({
+      screenshot: () =>
+        new Response(JSON.stringify({ error: "internal" }), {
+          status: 500,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const baselinePng = makePng(5, 5, [0, 0, 0, 255]);
+    await Bun.write(join(scratch, "x.png"), baselinePng);
+
+    const result = await runCli([
+      "screenshot",
+      "x",
+      "--baseline",
+      join(scratch, "x.png"),
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(5);
+  });
+
+  test("--threshold 0.0 boundary: argv valid, exit ∈ {0, 1}", async () => {
+    const baseline = makePng(2, 2, [10, 20, 30, 255]);
+    await Bun.write(join(scratch, "boundary0.png"), baseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(baseline, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "boundary0",
+      "--baseline",
+      join(scratch, "boundary0.png"),
+      "--threshold",
+      "0.0",
+      "--port",
+      String(mock.port),
+    ]);
+    expect([0, 1]).toContain(result.exitCode);
+  });
+
+  test("--threshold 1.0 boundary: argv valid, exit ∈ {0, 1}", async () => {
+    const baseline = makePng(2, 2, [10, 20, 30, 255]);
+    await Bun.write(join(scratch, "boundary1.png"), baseline);
+
+    mock = startMock({
+      screenshot: () =>
+        new Response(baseline, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "boundary1",
+      "--baseline",
+      join(scratch, "boundary1.png"),
+      "--threshold",
+      "1.0",
+      "--port",
+      String(mock.port),
+    ]);
+    expect([0, 1]).toContain(result.exitCode);
+  });
+
+  test("decode_failed: server returns malformed PNG bytes → exit 7", async () => {
+    // Pre-create a valid baseline so the SDK gets past the existence check
+    // and reaches decode_failed on the *actual* bytes.
+    const baseline = makePng(5, 5, [0, 0, 0, 255]);
+    await Bun.write(join(scratch, "broken.png"), baseline);
+
+    const broken = Uint8Array.of(0xff, 0x00, 0xff, 0x00);
+    mock = startMock({
+      screenshot: () =>
+        new Response(broken, { status: 200, headers: { "content-type": "image/png" } }),
+    });
+
+    const result = await runCli([
+      "screenshot",
+      "broken",
+      "--baseline",
+      join(scratch, "broken.png"),
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(7);
+    expect(result.stderr).toContain("decode");
+    // No JSON should be emitted on decode failure.
+    expect(result.stdout).toBe("");
+  });
+});
+
 describe("cli elements", () => {
   let mock: MockServer;
   let lastUrl: URL | null = null;
@@ -430,6 +839,14 @@ describe("cli error handling", () => {
     const result = await runCli(["--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("record");
+  });
+
+  test("USAGE mentions screenshot --baseline form", async () => {
+    const result = await runCli([]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("screenshot <name> --baseline <path>");
+    expect(result.stderr).toContain("--threshold <0.0-1.0>");
+    expect(result.stderr).toContain("--update-baseline");
   });
 });
 
