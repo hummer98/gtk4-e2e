@@ -220,6 +220,7 @@ pub struct ElementInfo {
 ///   - selector set: one entry per matching widget, in DFS pre-order
 ///     (outer matches before nested ones; nested matches inside an outer
 ///     match are not duplicated as separate roots).
+///
 /// Empty `roots` is **not** an error; HTTP returns 200 with `count: 0`.
 ///
 /// `count` is the total number of `ElementInfo` nodes across all roots

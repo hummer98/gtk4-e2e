@@ -444,6 +444,7 @@ struct ElementsQuery {
     max_depth: Option<u32>,
 }
 
+#[allow(clippy::result_large_err)] // axum Response is the standard error path here; boxing it would force every caller to unbox.
 fn parse_elements_query(raw: &str) -> Result<ElementsQuery, Response> {
     let mut selector: Option<String> = None;
     let mut max_depth: Option<u32> = None;

@@ -149,7 +149,7 @@ fn to_element_info(
     });
 
     let mut children = Vec::new();
-    if max_depth.map_or(true, |m| depth < m) {
+    if max_depth.is_none_or(|m| depth < m) {
         let mut cur = widget.first_child();
         while let Some(child) = cur {
             let next = child.next_sibling();
