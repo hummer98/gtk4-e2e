@@ -299,6 +299,12 @@ export class E2EClient {
    *
    * `failOnMissing` defaults to `env.CI === "true"` unless caller overrides.
    * The pure function `expectScreenshot()` stays env-agnostic.
+   *
+   * When `opts.baselineDir` is explicit, the `<scenario_basename>-` prefix
+   * is suppressed and the file is read/written as `<baselineDir>/<name>.png`.
+   * Rationale: a caller that pins `baselineDir` (CLI `--baseline <path>`,
+   * tools that compose paths externally) is asserting full control over
+   * the filename; prefix derivation would silently rewrite their path.
    */
   async expectScreenshot(
     name: string,
@@ -319,11 +325,18 @@ export class E2EClient {
       skipFiles: [...SKIP_FILES],
     });
 
-    const scenarioBasename = resolveScenarioBasename({
-      optsTestFile: opts.testFile,
-      callerStack,
-      skipFiles: [...SKIP_FILES],
-    });
+    // 「明示 > 暗黙」(plan §1.1): opts.baselineDir を渡した呼び出し側は
+    // ファイル名も自前管理しているとみなし、scenario_basename prefix は付け
+    // ない (CLI `--baseline <path>` のようにファイル名まで完全に決め打って
+    // いるケースに対応; rev2 fix)。
+    const scenarioBasename =
+      opts.baselineDir !== undefined
+        ? null
+        : resolveScenarioBasename({
+            optsTestFile: opts.testFile,
+            callerStack,
+            skipFiles: [...SKIP_FILES],
+          });
     const fullName = scenarioBasename === null ? name : `${scenarioBasename}-${name}`;
 
     const failOnMissing = opts.failOnMissing ?? env.CI === "true";

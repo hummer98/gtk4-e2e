@@ -49,7 +49,7 @@ describe("E2EClient.expectScreenshot wrapper", () => {
     rmSync(scratch, { recursive: true, force: true });
   });
 
-  test("opts.baselineDir wins over default resolution", async () => {
+  test("opts.baselineDir wins over default resolution (no prefix)", async () => {
     const png = makePng(4, 4, [10, 20, 30, 255]);
     const client = makeStubbedClient(png);
 
@@ -59,8 +59,10 @@ describe("E2EClient.expectScreenshot wrapper", () => {
     });
 
     expect(result.match).toBe(true);
-    // wrapper が <basename>-<name>.png に prefix する。基準 file は本テストファイル。
-    expect(existsSync(join(scratch, "clientExpectScreenshot.test.ts-button.png"))).toBe(true);
+    // opts.baselineDir 明示時は <basename>-<name> prefix を skip する
+    // (rev2 で確定した「呼び出し側がファイル名まで制御している」前提)。
+    expect(existsSync(join(scratch, "button.png"))).toBe(true);
+    expect(existsSync(join(scratch, "clientExpectScreenshot.test.ts-button.png"))).toBe(false);
   });
 
   test("opts.testFile が env GTK4_E2E_BASELINE_DIR より優先される (案 X)", async () => {
@@ -110,7 +112,8 @@ describe("E2EClient.expectScreenshot wrapper", () => {
     }
     expect(thrown).toBeInstanceOf(VisualDiffError);
     expect((thrown as VisualDiffError).kind).toBe("baseline_missing");
-    expect(existsSync(join(scratch, "clientExpectScreenshot.test.ts-ci-missing.png"))).toBe(false);
+    // opts.baselineDir 明示時は prefix が付かないため、<scratch>/<name>.png を確認。
+    expect(existsSync(join(scratch, "ci-missing.png"))).toBe(false);
   });
 
   test("CI unset + baseline missing → auto-saves and returns match=true", async () => {
@@ -124,9 +127,7 @@ describe("E2EClient.expectScreenshot wrapper", () => {
 
     expect(result.match).toBe(true);
     expect(result.diffPixels).toBe(0);
-    expect(existsSync(join(scratch, "clientExpectScreenshot.test.ts-local-first-run.png"))).toBe(
-      true,
-    );
+    expect(existsSync(join(scratch, "local-first-run.png"))).toBe(true);
   });
 
   test("opts.failOnMissing=false overrides CI=true (escape hatch)", async () => {
@@ -140,7 +141,7 @@ describe("E2EClient.expectScreenshot wrapper", () => {
     });
 
     expect(result.match).toBe(true);
-    expect(existsSync(join(scratch, "clientExpectScreenshot.test.ts-escape.png"))).toBe(true);
+    expect(existsSync(join(scratch, "escape.png"))).toBe(true);
   });
 
   test('CI other than "true" (e.g. "1") does not trigger fail mode', async () => {
@@ -156,7 +157,25 @@ describe("E2EClient.expectScreenshot wrapper", () => {
     });
 
     expect(result.match).toBe(true);
-    expect(existsSync(join(scratch, "clientExpectScreenshot.test.ts-ci-1.png"))).toBe(true);
+    expect(existsSync(join(scratch, "ci-1.png"))).toBe(true);
+  });
+
+  test("opts.baselineDir + opts.testFile both → baselineDir wins, no prefix (rev2)", async () => {
+    // baselineDir を渡した時点で「呼び出し側がファイル名まで制御している」と
+    // 解釈する規約 (rev2 fix)。testFile が同時に与えられても prefix は付かない。
+    const png = makePng(4, 4, [33, 99, 33, 255]);
+    const client = makeStubbedClient(png);
+    const fakeTestFile = join(scratch, "fake.spec.ts");
+
+    const result = await client.expectScreenshot("explicit", {
+      baselineDir: scratch,
+      testFile: fakeTestFile,
+      env: {},
+    });
+
+    expect(result.match).toBe(true);
+    expect(existsSync(join(scratch, "explicit.png"))).toBe(true);
+    expect(existsSync(join(scratch, "fake.spec.ts-explicit.png"))).toBe(false);
   });
 
   test("default baselineDir resolves to <caller_dir>/__screenshots__", async () => {

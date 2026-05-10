@@ -197,6 +197,7 @@ Xvfb) to produce the mp4.
 - **commit 推奨**: ローカルで auto-save された baseline は **必ず commit** してください。commit せずに push すると CI で baseline 不在 → fail のチェーンが起きます。`__screenshots__/` は **gitignore に入れない** こと。
 - **更新**: 意図的に baseline を更新する場合は `expectScreenshot(name, { updateBaseline: true })` (CI / env を問わず最優先で上書き) を使い、PR に baseline diff を含めてレビューします。
 - **env override**: `GTK4_E2E_BASELINE_DIR` を export すると baseline ディレクトリ全体を別パスへ切り替えられます (CI で OS/matrix 別に baseline 群を集約したい場合の一時的 override 用)。
+- **`opts.baselineDir` 明示時**: ファイル名から `<scenario_basename>-` prefix が外れ `<baselineDir>/<name>.png` になります (CLI `bunx gtk4-e2e screenshot <name> --baseline <path>` のようにファイル名まで呼び出し側が決め打つケース向け)。`opts.testFile` 経由や stack 推定経由の解決では prefix は維持されます。
 
 `process.env.CI` は `"true"` (文字列一致) のみ判定。Travis 旧設定の `CI=1` は意図的に取りこぼします — CI 側で `CI=true` を export するか `opts.failOnMissing` で明示してください。
 

@@ -338,11 +338,17 @@ async function runScreenshot(parsed: ParsedArgs): Promise<number> {
   // Diff mode: positional is the SDK `name`; `--baseline <path>` supplies
   // only the directory (its basename / suffix is intentionally ignored — see
   // plan §Q1 sub-decision).
+  //
+  // CLI semantics (T020-C): baseline 不在は **常に** VisualDiffError として
+  // 扱い exit 7。意図的に baseline を作成 / 更新するのは `--update-baseline`
+  // 経由のみ (`opts.updateBaseline=true` は failOnMissing より優先される)。
+  // T020-B の SDK auto-save 挙動 (CI 未検出時の暗黙作成) は CLI からは封じる。
   const baselineDir = dirname(resolve(process.cwd(), baseline));
   const result = await client.expectScreenshot(positional, {
     baselineDir,
     threshold: parsed.flags.threshold,
     updateBaseline: parsed.flags.updateBaseline,
+    failOnMissing: true,
   });
   process.stdout.write(`${JSON.stringify({ name: positional, ...result }, null, 2)}\n`);
   return result.match ? 0 : 1;
