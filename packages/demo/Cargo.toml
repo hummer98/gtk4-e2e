@@ -12,7 +12,8 @@ path = "src/main.rs"
 [dependencies]
 gtk4 = { version = "0.9", default-features = false }
 gtk4-e2e-server = { path = "../server", optional = true }
+serde_json = { version = "1", optional = true }
 
 [features]
 default = []
-e2e = ["dep:gtk4-e2e-server", "gtk4-e2e-server/e2e"]
+e2e = ["dep:gtk4-e2e-server", "gtk4-e2e-server/e2e", "dep:serde_json"]

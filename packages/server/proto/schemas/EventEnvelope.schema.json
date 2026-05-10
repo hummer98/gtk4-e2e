@@ -1,0 +1,31 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "EventKind": {
+      "description": "Discriminator for `EventEnvelope.kind`.\n\n`LogLine` is reserved for a future tracing-layer integration (Step >= 8); the variant exists today so filter strings are stable across versions. Until that integration ships, the server never produces `EventEnvelope`s with `kind = LogLine` — clients can pass `\"log_line\"` in the filter list without error, but no frames will be delivered for that kind alone.",
+      "enum": [
+        "state_change",
+        "log_line"
+      ],
+      "type": "string"
+    }
+  },
+  "description": "Body of a single message sent over `WS /test/events` (Step 7).\n\nWire shape is internally tagged on `kind`. `data` is intentionally an opaque JSON value so new event kinds can be added without renegotiating the schema. SDK consumers narrow on `kind` and parse `data` per variant.\n\n`ts` is RFC3339 UTC, mirroring `InstanceFile.started_at` (Step 1).",
+  "properties": {
+    "data": true,
+    "kind": {
+      "$ref": "#/definitions/EventKind"
+    },
+    "ts": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "data",
+    "kind",
+    "ts"
+  ],
+  "title": "EventEnvelope",
+  "type": "object"
+}

@@ -26,12 +26,14 @@ pub mod snapshot;
 pub mod tree;
 #[cfg(feature = "e2e")]
 pub mod wait;
+#[cfg(feature = "e2e")]
+pub mod ws;
 
 #[cfg(feature = "e2e")]
 pub use gtk4 as gtk;
 
 #[cfg(feature = "e2e")]
-pub use crate::proto::{Capability, Info};
+pub use crate::proto::{Capability, EventEnvelope, EventKind, Info};
 
 #[cfg(feature = "e2e")]
 pub use crate::registry::{runtime_dir, InstanceFile, REGISTRY_SUBDIR};
@@ -40,7 +42,7 @@ pub use crate::registry::{runtime_dir, InstanceFile, REGISTRY_SUBDIR};
 pub use crate::schema_export::write_schemas;
 
 #[cfg(feature = "e2e")]
-pub use crate::start_impl::{start, Handle};
+pub use crate::start_impl::{current_rfc3339, start, Handle};
 
 #[cfg(feature = "e2e")]
 mod start_impl {
@@ -51,7 +53,7 @@ mod start_impl {
     use crate::http::{router, AppState};
     use crate::main_thread::{install_app, spawn_receiver_loop, MainCmd};
     use crate::port::pick_free_listener;
-    use crate::proto::{Capability, Info};
+    use crate::proto::{Capability, EventEnvelope, Info};
     use crate::registry::{delete_instance_file, runtime_dir, write_instance_file, InstanceFile};
 
     /// Live handle to a running in-process e2e server.
@@ -63,6 +65,7 @@ mod start_impl {
         shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
         registry_path: Option<PathBuf>,
         info: Arc<Info>,
+        event_tx: tokio::sync::broadcast::Sender<EventEnvelope>,
     }
 
     impl Handle {
@@ -79,6 +82,20 @@ mod start_impl {
         /// Path of the registry file currently advertising this instance.
         pub fn registry_path(&self) -> Option<&Path> {
             self.registry_path.as_deref()
+        }
+
+        /// Push side of the event broadcast bus. Cloning a `Sender` is cheap.
+        ///
+        /// `broadcast::Sender::send(env)` returns:
+        /// - `Ok(usize)` = number of currently-subscribed receivers (>= 1)
+        /// - `Err(SendError(env))` when there are zero subscribers
+        ///
+        /// The `Ok(0)` case does **not** occur — the absence of subscribers
+        /// manifests as `Err(SendError)`. Callers (e.g. the demo) typically
+        /// discard the result with `let _ = handle.event_tx().send(env);`,
+        /// dropping the event when no test client is attached.
+        pub fn event_tx(&self) -> tokio::sync::broadcast::Sender<EventEnvelope> {
+            self.event_tx.clone()
         }
     }
 
@@ -117,6 +134,7 @@ mod start_impl {
                 Capability::Tap,
                 Capability::Wait,
                 Capability::Screenshot,
+                Capability::Events,
             ],
             token_required: token.as_ref().map(|_| true),
         });
@@ -142,10 +160,19 @@ mod start_impl {
         install_app(app.clone());
         spawn_receiver_loop(cmd_rx);
 
+        // Event bus for `WS /test/events`. Capacity 256 is a soft buffer:
+        // SDK clients that lag past it observe `RecvError::Lagged` and skip
+        // ahead. The receiver returned here is dropped immediately because
+        // every connected WebSocket subscribes via `state.event_tx.subscribe()`
+        // at upgrade time; with no live subscribers, `send` returns
+        // `Err(SendError)` which the demo discards.
+        let (event_tx, _event_rx) = tokio::sync::broadcast::channel::<EventEnvelope>(256);
+
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
         let state = AppState {
             info: info.clone(),
             cmd_tx,
+            event_tx: event_tx.clone(),
         };
         let app_router = router(state);
 
@@ -166,6 +193,7 @@ mod start_impl {
             shutdown_tx: Some(shutdown_tx),
             registry_path: Some(registry_path),
             info,
+            event_tx,
         })
     }
 
@@ -183,7 +211,11 @@ mod start_impl {
         }
     }
 
-    fn current_rfc3339() -> String {
+    /// RFC3339 UTC timestamp for `EventEnvelope.ts` and `InstanceFile.started_at`.
+    ///
+    /// Exposed publicly so the demo can stamp events without re-pulling `time`
+    /// as a direct dependency. Returns the Unix epoch on formatter failure.
+    pub fn current_rfc3339() -> String {
         time::OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())

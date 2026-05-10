@@ -29,6 +29,9 @@ fn main() {
         #[cfg(feature = "e2e")]
         let server_slot = server_slot.clone();
         app.connect_activate(move |app| {
+            #[cfg(feature = "e2e")]
+            build_ui(app, server_slot.clone());
+            #[cfg(not(feature = "e2e"))]
             build_ui(app);
 
             #[cfg(feature = "e2e")]
@@ -50,7 +53,10 @@ fn main() {
     app.run();
 }
 
-fn build_ui(app: &Application) {
+fn build_ui(
+    app: &Application,
+    #[cfg(feature = "e2e")] server_slot: Rc<RefCell<Option<gtk4_e2e_server::Handle>>>,
+) {
     // Plan §Q13 / Review M6: Entry initial text must be `"hello"` so the
     // scenario expectation (`state_eq label1.label = "hello"`) becomes true
     // as soon as the button is tapped.
@@ -64,8 +70,31 @@ fn build_ui(app: &Application) {
     {
         let entry = entry.clone();
         let label = label.clone();
+        #[cfg(feature = "e2e")]
+        let server_slot = server_slot.clone();
         button.connect_clicked(move |_| {
-            label.set_text(entry.text().as_str());
+            let new_text = entry.text();
+            label.set_text(new_text.as_str());
+
+            // Step 7: surface the state change as an `EventEnvelope` for any
+            // SDK client subscribed to `WS /test/events`. `Sender::send`
+            // returns `Err(SendError)` when no client is attached — that is
+            // expected and silently dropped.
+            #[cfg(feature = "e2e")]
+            {
+                if let Some(handle) = server_slot.borrow().as_ref() {
+                    let env = gtk4_e2e_server::EventEnvelope {
+                        kind: gtk4_e2e_server::EventKind::StateChange,
+                        ts: gtk4_e2e_server::current_rfc3339(),
+                        data: serde_json::json!({
+                            "selector": "#label1",
+                            "property": "label",
+                            "value": new_text.as_str(),
+                        }),
+                    };
+                    let _ = handle.event_tx().send(env);
+                }
+            }
         });
     }
 

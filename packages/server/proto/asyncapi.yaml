@@ -1,0 +1,37 @@
+asyncapi: 2.6.0
+info:
+  title: gtk4-e2e events stream
+  version: 0.0.0
+  description: >-
+    Per-instance WebSocket channel for state / log / render events. See
+    docs/seed.md §4 / Step 7. The schema for each EventEnvelope payload is
+    sourced from the committed JSON Schema, which is itself derived from
+    proto.rs (SSOT — see ADR-0002).
+servers:
+  loopback:
+    url: ws://127.0.0.1:{port}
+    protocol: ws
+    variables:
+      port:
+        description: Per-instance port (19000–19999), discovered via /test/info.
+        default: '19000'
+channels:
+  /test/events:
+    parameters:
+      kinds:
+        description: >-
+          CSV of EventKind to subscribe to (omit to subscribe to every kind).
+          Unknown tokens are ignored server-side for forward-compatibility.
+        schema:
+          type: string
+    subscribe:
+      operationId: receiveEvents
+      summary: Receive events from the running app instance.
+      message:
+        $ref: '#/components/messages/EventEnvelope'
+components:
+  messages:
+    EventEnvelope:
+      contentType: application/json
+      payload:
+        $ref: 'schemas/EventEnvelope.schema.json'

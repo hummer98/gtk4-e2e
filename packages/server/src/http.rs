@@ -28,7 +28,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::input::TapError;
 use crate::main_thread::{MainCmd, WaitEvalError};
-use crate::proto::{Info, TapTarget, WaitRequest};
+use crate::proto::{EventEnvelope, Info, TapTarget, WaitRequest};
 use crate::snapshot::ScreenshotError;
 use crate::tree::parse_selector;
 use crate::wait::{poll_until, WaitError, MAX_TIMEOUT_MS};
@@ -38,6 +38,9 @@ use crate::wait::{poll_until, WaitError, MAX_TIMEOUT_MS};
 pub struct AppState {
     pub info: Arc<Info>,
     pub cmd_tx: mpsc::Sender<MainCmd>,
+    /// Broadcast bus for `WS /test/events`. Cloned per-connection at upgrade
+    /// time via `subscribe()`.
+    pub event_tx: tokio::sync::broadcast::Sender<EventEnvelope>,
 }
 
 /// Build the router exposed by the in-process server.
@@ -47,6 +50,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/tap", post(post_tap))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
+        .route("/test/events", get(crate::ws::ws_events))
         .fallback(unimpl)
         .with_state(state)
 }

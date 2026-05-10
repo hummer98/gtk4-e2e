@@ -1,0 +1,11 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Discriminator for `EventEnvelope.kind`.\n\n`LogLine` is reserved for a future tracing-layer integration (Step >= 8); the variant exists today so filter strings are stable across versions. Until that integration ships, the server never produces `EventEnvelope`s with `kind = LogLine` — clients can pass `\"log_line\"` in the filter list without error, but no frames will be delivered for that kind alone.",
+  "enum": [
+    "state_change",
+    "log_line"
+  ],
+  "title": "EventKind",
+  "type": "string"
+}

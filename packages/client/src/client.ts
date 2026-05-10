@@ -18,6 +18,11 @@ import {
   NotImplementedError,
   WaitTimeoutError,
 } from "./errors.ts";
+import {
+  openEventStream,
+  type EventStream,
+  type EventsOptions,
+} from "./events.ts";
 import type {
   Info,
   TapTarget,
@@ -124,6 +129,17 @@ export class E2EClient {
       expect: "json",
       waitTimeoutMs: timeoutMs,
     });
+  }
+
+  /**
+   * Subscribe to `WS /test/events` and return an async iterable of envelopes.
+   *
+   * Resolves once the WebSocket has opened and the server-side subscriber is
+   * live, so callers can chain a triggering action (e.g. `await client.tap(...)`)
+   * immediately after the await without racing the broadcaster.
+   */
+  async events(opts?: EventsOptions): Promise<EventStream> {
+    return openEventStream(this, opts);
   }
 
   async screenshot(): Promise<Uint8Array>;

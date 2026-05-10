@@ -17,6 +17,8 @@ const ALL_SCHEMA_FILES: &[&str] = &[
     "WaitRequest.schema.json",
     "WaitCondition.schema.json",
     "WaitResult.schema.json",
+    "EventEnvelope.schema.json",
+    "EventKind.schema.json",
 ];
 
 #[test]
@@ -89,8 +91,8 @@ fn capability_includes_tap_wait() {
 }
 
 #[test]
-fn capability_enum_lists_screenshot_at_tail() {
-    // Plan §Q5: Capability ordering must end with Screenshot after Step 6.
+fn capability_enum_lists_events_at_tail() {
+    // Plan §Q5 / Step 7: Capability ordering must end with Events.
     let tmp = tempfile::tempdir().unwrap();
     write_schemas(tmp.path()).unwrap();
 
@@ -103,8 +105,8 @@ fn capability_enum_lists_screenshot_at_tail() {
     let strs: Vec<&str> = arr.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         strs,
-        vec!["info", "tap", "wait", "screenshot"],
-        "Capability enum order must be [info, tap, wait, screenshot]"
+        vec!["info", "tap", "wait", "screenshot", "events"],
+        "Capability enum order must be [info, tap, wait, screenshot, events]"
     );
 }
 
@@ -123,6 +125,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Tap,
             gtk4_e2e_server::Capability::Wait,
             gtk4_e2e_server::Capability::Screenshot,
+            gtk4_e2e_server::Capability::Events,
         ],
         token_required: None,
     };
@@ -133,8 +136,45 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Tap,
             gtk4_e2e_server::Capability::Wait,
             gtk4_e2e_server::Capability::Screenshot,
+            gtk4_e2e_server::Capability::Events,
         ]
     );
+}
+
+#[test]
+fn event_kind_enum_has_state_change_and_log_line() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+    let bytes = fs::read(tmp.path().join("EventKind.schema.json")).unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = v
+        .get("enum")
+        .and_then(Value::as_array)
+        .expect("EventKind schema should have enum array");
+    let strs: Vec<&str> = arr.iter().filter_map(Value::as_str).collect();
+    assert!(
+        strs.contains(&"state_change"),
+        "missing state_change in {strs:?}"
+    );
+    assert!(strs.contains(&"log_line"), "missing log_line in {strs:?}");
+}
+
+#[test]
+fn event_envelope_schema_has_kind_ts_data() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+    let bytes = fs::read(tmp.path().join("EventEnvelope.schema.json")).unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let props = v
+        .pointer("/properties")
+        .and_then(Value::as_object)
+        .expect("EventEnvelope should have properties");
+    for k in ["kind", "ts", "data"] {
+        assert!(
+            props.contains_key(k),
+            "EventEnvelope missing property `{k}`"
+        );
+    }
 }
 
 #[test]

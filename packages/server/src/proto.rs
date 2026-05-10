@@ -22,13 +22,15 @@ pub struct Info {
 ///
 /// Variants are appended in the order in which they are surfaced. Step 6
 /// extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
+/// Step 7 appends `Events` for the `WS /test/events` channel.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Info,
     Tap,
     Wait,
     Screenshot,
+    Events,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -81,4 +83,32 @@ pub enum WaitCondition {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WaitResult {
     pub elapsed_ms: u64,
+}
+
+/// Body of a single message sent over `WS /test/events` (Step 7).
+///
+/// Wire shape is internally tagged on `kind`. `data` is intentionally an
+/// opaque JSON value so new event kinds can be added without renegotiating
+/// the schema. SDK consumers narrow on `kind` and parse `data` per variant.
+///
+/// `ts` is RFC3339 UTC, mirroring `InstanceFile.started_at` (Step 1).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct EventEnvelope {
+    pub kind: EventKind,
+    pub ts: String,
+    pub data: serde_json::Value,
+}
+
+/// Discriminator for `EventEnvelope.kind`.
+///
+/// `LogLine` is reserved for a future tracing-layer integration (Step >= 8);
+/// the variant exists today so filter strings are stable across versions.
+/// Until that integration ships, the server never produces `EventEnvelope`s
+/// with `kind = LogLine` — clients can pass `"log_line"` in the filter list
+/// without error, but no frames will be delivered for that kind alone.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    StateChange,
+    LogLine,
 }

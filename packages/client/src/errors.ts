@@ -51,3 +51,17 @@ export class WaitTimeoutError extends E2EError {
     this.timeoutMs = timeoutMs;
   }
 }
+
+// `WS /test/events` failures. Step 7 plan §5.4 / §10.2:
+//   * thrown from `await client.events(...)` when the initial open fails
+//     (host unreachable, capability missing, handshake rejected)
+//   * thrown from the next `stream.next()` after `maxRetries` reconnect
+//     attempts are exhausted. The default cap is 10; pass
+//     `reconnect: { maxRetries: Infinity }` to opt out (caller owns
+//     termination via AbortSignal).
+export class EventStreamError extends E2EError {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "EventStreamError";
+  }
+}

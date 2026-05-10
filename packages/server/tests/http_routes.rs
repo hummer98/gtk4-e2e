@@ -30,14 +30,23 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
         port: 0,
         app_name: "test".into(),
         app_version: "0".into(),
-        capabilities: vec![Capability::Info, Capability::Tap, Capability::Wait],
+        capabilities: vec![
+            Capability::Info,
+            Capability::Tap,
+            Capability::Wait,
+            Capability::Screenshot,
+            Capability::Events,
+        ],
         token_required: None,
     });
     let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    let (event_tx, _event_rx) =
+        tokio::sync::broadcast::channel::<gtk4_e2e_server::EventEnvelope>(8);
     (
         AppState {
             info,
             cmd_tx: cmd_tx.clone(),
+            event_tx,
         },
         cmd_tx,
     )
