@@ -1,0 +1,15 @@
+{
+  "name": "gtk4-e2e",
+  "version": "0.0.0",
+  "description": "Slash commands and SKILL for driving the gtk4-e2e CLI from Claude Code (tap, screenshot, record, run scenarios). MVP targets Linux + X11 + ffmpeg.",
+  "author": {
+    "name": "gtk4-e2e contributors",
+    "url": "https://github.com/hummer98/gtk4-e2e"
+  },
+  "homepage": "https://github.com/hummer98/gtk4-e2e",
+  "repository": "https://github.com/hummer98/gtk4-e2e",
+  "license": "MIT",
+  "keywords": ["gtk4", "rust", "e2e", "testing", "ffmpeg", "claude-code"],
+  "skills": "./skills/",
+  "commands": "./commands/"
+}
