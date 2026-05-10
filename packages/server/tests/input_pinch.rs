@@ -106,7 +106,12 @@ fn pinch_duration_too_long_returns_error() {
 
     let err = pinch(&window, XY { x: 100, y: 100 }, 1.5, 10_001).unwrap_err();
     assert!(
-        matches!(err, PinchError::DurationTooLong { duration_ms: 10_001 }),
+        matches!(
+            err,
+            PinchError::DurationTooLong {
+                duration_ms: 10_001
+            }
+        ),
         "got {err:?}"
     );
 
@@ -144,7 +149,12 @@ fn pinch_invalid_scale_zero() {
 
     let err = pinch(&window, XY { x: 100, y: 100 }, 0.0, 100).unwrap_err();
     assert!(
-        matches!(err, PinchError::InvalidScale { reason: "non_positive" }),
+        matches!(
+            err,
+            PinchError::InvalidScale {
+                reason: "non_positive"
+            }
+        ),
         "got {err:?}"
     );
 
@@ -163,7 +173,12 @@ fn pinch_invalid_scale_negative() {
 
     let err = pinch(&window, XY { x: 100, y: 100 }, -1.0, 100).unwrap_err();
     assert!(
-        matches!(err, PinchError::InvalidScale { reason: "non_positive" }),
+        matches!(
+            err,
+            PinchError::InvalidScale {
+                reason: "non_positive"
+            }
+        ),
         "got {err:?}"
     );
 
@@ -182,7 +197,12 @@ fn pinch_invalid_scale_too_large() {
 
     let err = pinch(&window, XY { x: 100, y: 100 }, 100.0, 100).unwrap_err();
     assert!(
-        matches!(err, PinchError::InvalidScale { reason: "too_large" }),
+        matches!(
+            err,
+            PinchError::InvalidScale {
+                reason: "too_large"
+            }
+        ),
         "got {err:?}"
     );
 
@@ -202,7 +222,12 @@ fn pinch_invalid_scale_too_small() {
     // 0.01 < 1 / MAX_PINCH_SCALE (= 1/50 = 0.02)
     let err = pinch(&window, XY { x: 100, y: 100 }, 0.01, 100).unwrap_err();
     assert!(
-        matches!(err, PinchError::InvalidScale { reason: "too_small" }),
+        matches!(
+            err,
+            PinchError::InvalidScale {
+                reason: "too_small"
+            }
+        ),
         "got {err:?}"
     );
 
@@ -222,7 +247,16 @@ fn pinch_out_of_bounds_returns_error() {
     let err = pinch(&window, XY { x: -1, y: -1 }, 1.5, 100).unwrap_err();
     assert!(matches!(err, PinchError::OutOfBounds { .. }), "got {err:?}");
 
-    let err = pinch(&window, XY { x: 10_000, y: 10_000 }, 1.5, 100).unwrap_err();
+    let err = pinch(
+        &window,
+        XY {
+            x: 10_000,
+            y: 10_000,
+        },
+        1.5,
+        100,
+    )
+    .unwrap_err();
     assert!(matches!(err, PinchError::OutOfBounds { .. }), "got {err:?}");
 
     window.close();

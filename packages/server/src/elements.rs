@@ -53,9 +53,11 @@ pub fn walk_elements(
     }
 
     let parsed = match selector {
-        Some(s) => Some(parse_selector(s).map_err(|e| ElementsError::InvalidSelector {
-            reason: e.reason.to_string(),
-        })?),
+        Some(s) => Some(
+            parse_selector(s).map_err(|e| ElementsError::InvalidSelector {
+                reason: e.reason.to_string(),
+            })?,
+        ),
         None => None,
     };
 

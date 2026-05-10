@@ -185,10 +185,9 @@ fn handle_cmd(cmd: MainCmd) {
             max_depth,
             reply,
         } => {
-            let outcome = with_app(|app| {
-                crate::elements::walk_elements(app, selector.as_deref(), max_depth)
-            })
-            .unwrap_or(Err(ElementsError::NoActiveWindow));
+            let outcome =
+                with_app(|app| crate::elements::walk_elements(app, selector.as_deref(), max_depth))
+                    .unwrap_or(Err(ElementsError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
         MainCmd::Pinch {

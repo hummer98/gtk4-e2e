@@ -54,14 +54,21 @@ fn full_tree_returns_one_root_per_window() {
     let (app, window) = build_fixture();
     let resp = walk_elements(&app, None, None).expect("walk should succeed");
     assert_eq!(resp.roots.len(), 1, "single window expected");
-    assert!(resp.count > 1, "tree should have many nodes, got {}", resp.count);
+    assert!(
+        resp.count > 1,
+        "tree should have many nodes, got {}",
+        resp.count
+    );
 
     // count must be the recursive sum over roots.
     fn rec(info: &gtk4_e2e_server::proto::ElementInfo) -> u32 {
         1 + info.children.iter().map(rec).sum::<u32>()
     }
     let recomputed: u32 = resp.roots.iter().map(rec).sum();
-    assert_eq!(recomputed, resp.count, "count must equal recursive node count");
+    assert_eq!(
+        recomputed, resp.count,
+        "count must equal recursive node count"
+    );
 
     window.close();
     common::pump_glib(32);
