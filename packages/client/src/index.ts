@@ -1,3 +1,4 @@
+export type { ClientExpectScreenshotOptions } from "./client.ts";
 export { E2EClient } from "./client.ts";
 export type { DiscoverFilter, InstanceFile } from "./discover.ts";
 export { discover, runtimeDir } from "./discover.ts";

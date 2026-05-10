@@ -189,6 +189,17 @@ macOS and Wayland sessions are not supported by the recorder (T009 MVP)
 and will exit with code 6 (`RecorderError`). Run on a Linux X11 host (or
 Xvfb) to produce the mp4.
 
+## Visual regression baseline (`__screenshots__/` 規約)
+
+`E2EClient.expectScreenshot(name, opts?)` で取得した PNG は scenario と同階層の `__screenshots__/<scenario_basename>-<name>.png` に baseline として配置されます (例: `packages/demo/scenarios/__screenshots__/screenshot.spec.ts-main-window.png`)。詳細は [ADR-0003](docs/adr/0003-visual-regression-engine.md) を参照。
+
+- **初回実行**: baseline 不在時は default で **auto-save** され `match: true` を返します (Playwright 同等)。`process.env.CI === "true"` の場合のみ `VisualDiffError("baseline_missing")` を throw します。
+- **commit 推奨**: ローカルで auto-save された baseline は **必ず commit** してください。commit せずに push すると CI で baseline 不在 → fail のチェーンが起きます。`__screenshots__/` は **gitignore に入れない** こと。
+- **更新**: 意図的に baseline を更新する場合は `expectScreenshot(name, { updateBaseline: true })` (CI / env を問わず最優先で上書き) を使い、PR に baseline diff を含めてレビューします。
+- **env override**: `GTK4_E2E_BASELINE_DIR` を export すると baseline ディレクトリ全体を別パスへ切り替えられます (CI で OS/matrix 別に baseline 群を集約したい場合の一時的 override 用)。
+
+`process.env.CI` は `"true"` (文字列一致) のみ判定。Travis 旧設定の `CI=1` は意図的に取りこぼします — CI 側で `CI=true` を export するか `opts.failOnMissing` で明示してください。
+
 ## Claude Code integration
 
 A Claude Code plugin lives under `packages/client/claude-plugin/` with

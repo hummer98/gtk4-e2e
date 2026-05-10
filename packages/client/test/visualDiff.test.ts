@@ -155,29 +155,85 @@ describe("expectScreenshot", () => {
     expect(Buffer.from(written).equals(Buffer.from(newActual))).toBe(true);
   });
 
-  test("throws VisualDiffError(baseline_missing) when baseline does not exist", async () => {
+  test("throws VisualDiffError(baseline_missing) when baseline absent and failOnMissing=true", async () => {
     const actual = makePng(5, 5, [0, 255, 0, 255]);
 
     let thrown: unknown;
     try {
-      await expectScreenshot(actual, "missing", { baselineDir: scratch });
+      await expectScreenshot(actual, "missing", {
+        baselineDir: scratch,
+        failOnMissing: true,
+      });
     } catch (err) {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(VisualDiffError);
     expect((thrown as VisualDiffError).kind).toBe("baseline_missing");
+    expect(existsSync(join(scratch, "missing.png"))).toBe(false);
+  });
+
+  test("auto-saves baseline on first run when failOnMissing is unset (= default)", async () => {
+    const actual = makePng(5, 5, [0, 255, 0, 255]);
+
+    const result = await expectScreenshot(actual, "first-run", { baselineDir: scratch });
+
+    expect(result.match).toBe(true);
+    expect(result.diffPixels).toBe(0);
+    expect(result.totalPixels).toBe(25);
+    expect(result.actualPath).toBeUndefined();
+    expect(result.diffPath).toBeUndefined();
+    expect(existsSync(join(scratch, "first-run.png"))).toBe(true);
+  });
+
+  test("auto-saved baseline content equals the actual bytes", async () => {
+    const actual = makePng(8, 6, [10, 20, 30, 255]);
+
+    await expectScreenshot(actual, "auto", { baselineDir: scratch });
+
+    const written = await Bun.file(join(scratch, "auto.png")).bytes();
+    expect(written.byteLength).toBe(actual.byteLength);
+    expect(Buffer.from(written).equals(Buffer.from(actual))).toBe(true);
+  });
+
+  test("does not write baseline when failOnMissing=true and baseline absent", async () => {
+    const actual = makePng(5, 5, [0, 255, 0, 255]);
+
+    await expect(
+      expectScreenshot(actual, "no-write", {
+        baselineDir: scratch,
+        failOnMissing: true,
+      }),
+    ).rejects.toBeInstanceOf(VisualDiffError);
+
+    expect(existsSync(join(scratch, "no-write.png"))).toBe(false);
+    expect(existsSync(join(scratch, "no-write.actual.png"))).toBe(false);
+    expect(existsSync(join(scratch, "no-write.diff.png"))).toBe(false);
+  });
+
+  test("updateBaseline=true overrides failOnMissing=true (still writes)", async () => {
+    const actual = makePng(5, 5, [0, 255, 0, 255]);
+
+    const result = await expectScreenshot(actual, "override", {
+      baselineDir: scratch,
+      failOnMissing: true,
+      updateBaseline: true,
+    });
+
+    expect(result.match).toBe(true);
+    expect(result.diffPixels).toBe(0);
+    expect(existsSync(join(scratch, "override.png"))).toBe(true);
   });
 
   test("creates baseline on first run when updateBaseline=true and baseline absent", async () => {
     const actual = makePng(5, 5, [0, 255, 0, 255]);
 
-    const result = await expectScreenshot(actual, "first-run", {
+    const result = await expectScreenshot(actual, "first-run-update", {
       baselineDir: scratch,
       updateBaseline: true,
     });
 
     expect(result.match).toBe(true);
     expect(result.diffPixels).toBe(0);
-    expect(existsSync(join(scratch, "first-run.png"))).toBe(true);
+    expect(existsSync(join(scratch, "first-run-update.png"))).toBe(true);
   });
 });

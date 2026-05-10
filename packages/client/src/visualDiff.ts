@@ -1,23 +1,28 @@
-// Visual regression diff for the SDK (Step 17 / T020-A).
+// Visual regression diff for the SDK (Step 17 / T020-A, Step 18 / T020-B).
 //
 // Pure-function `expectScreenshot(actual, name, opts?)` compares PNG bytes
 // against `<baselineDir>/<name>.png` using pixelmatch + pngjs. The
 // `E2EClient.expectScreenshot()` wrapper in `client.ts` is the convenience
-// entry point that captures via `screenshot()` and delegates here.
+// entry point that captures via `screenshot()` and resolves baseline path
+// conventions before delegating here.
 //
-// Design notes (plan §1):
+// Design notes (plan §1, ADR-0003 §"Resolved Decisions"):
 //   * Q1 size mismatch → `match: false`, `diffPixels = totalPixels` (actual
 //     dims). No diff PNG is written; `actualPath` is set so callers can
 //     inspect.
 //   * Q4 mismatch-only file output: `<name>.actual.png` and `<name>.diff.png`
 //     land in the same `baselineDir`; matched runs leave the directory
 //     untouched.
-//   * Q6 baseline-missing → `VisualDiffError("baseline_missing")` unless
-//     `updateBaseline: true`, in which case the actual bytes become the new
-//     baseline and the run reports `match: true`.
+//   * T020-B baseline-missing branching:
+//       - `updateBaseline: true`            → write baseline, match=true.
+//       - `failOnMissing: true` && !exists → throw `VisualDiffError("baseline_missing")`.
+//       - !exists (default)                → auto-save baseline, match=true.
+//     CI-vs-local detection lives in the wrapper (`client.ts`); the pure
+//     function only honours the booleans it receives.
 //
-// path traversal (`name = "../foo"`): unsanitized in this MVP scope. T022
-// will decide between rejection / slugify / `/` namespace support.
+// path traversal (`name = "../foo"`): unsanitized in this MVP scope. The
+// decision is deferred to a follow-up task that will pick between rejection,
+// slugify, or `/` namespace support.
 
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join, resolve } from "node:path";
@@ -36,9 +41,16 @@ export interface ExpectScreenshotOptions {
 
   /**
    * If true, overwrite (or create) the baseline with the current actual bytes
-   * and return `match: true`. Default false.
+   * and return `match: true`. Takes priority over `failOnMissing`. Default false.
    */
   updateBaseline?: boolean;
+
+  /**
+   * If true and the baseline does not exist, throw `VisualDiffError("baseline_missing")`
+   * instead of auto-saving. The wrapper sets this from `process.env.CI === "true"`
+   * unless caller overrides. Ignored when `updateBaseline: true`. Default false.
+   */
+  failOnMissing?: boolean;
 
   /**
    * Directory containing baseline PNGs. Resolved against `process.cwd()` if
@@ -48,7 +60,7 @@ export interface ExpectScreenshotOptions {
 }
 
 export interface VisualDiffResult {
-  /** True iff `diffPixels === 0` after pixelmatch (or after updateBaseline). */
+  /** True iff `diffPixels === 0` after pixelmatch (or after updateBaseline / auto-save). */
   match: boolean;
   /** Number of pixels different per pixelmatch. For size mismatch, equals totalPixels. */
   diffPixels: number;
@@ -67,8 +79,9 @@ const DEFAULT_THRESHOLD = 0.1;
 
 /**
  * Compare `actual` (PNG bytes) against the baseline at `<baselineDir>/<name>.png`.
- * Throws `VisualDiffError` when the baseline is missing (and `updateBaseline` is
- * false), or when PNG decoding fails.
+ * Throws `VisualDiffError` when the baseline is missing and `failOnMissing: true`,
+ * or when PNG decoding fails. Default behaviour on missing baseline is to
+ * auto-save the actual bytes and report `match: true` (Playwright-style first-run).
  */
 export async function expectScreenshot(
   actual: Uint8Array,
@@ -81,25 +94,20 @@ export async function expectScreenshot(
   const actualPath = join(absDir, `${name}.actual.png`);
   const diffPath = join(absDir, `${name}.diff.png`);
 
-  const baselineExists = await Bun.file(baselinePath).exists();
-
   if (opts.updateBaseline === true) {
-    await mkdir(absDir, { recursive: true });
-    await Bun.write(baselinePath, actual);
-    const actualPng = decodePng(actual);
-    return {
-      match: true,
-      diffPixels: 0,
-      totalPixels: actualPng.width * actualPng.height,
-      baselinePath,
-    };
+    return writeBaseline(absDir, baselinePath, actual);
   }
 
+  const baselineExists = await Bun.file(baselinePath).exists();
+
   if (!baselineExists) {
-    throw new VisualDiffError(
-      `baseline PNG not found at ${baselinePath} — run with { updateBaseline: true } to create it`,
-      "baseline_missing",
-    );
+    if (opts.failOnMissing === true) {
+      throw new VisualDiffError(
+        `baseline PNG not found at ${baselinePath} — run with { updateBaseline: true } to create it`,
+        "baseline_missing",
+      );
+    }
+    return writeBaseline(absDir, baselinePath, actual);
   }
 
   const baselineBytes = await Bun.file(baselinePath).bytes();
@@ -160,6 +168,25 @@ interface DecodedPng {
   width: number;
   height: number;
   data: Buffer;
+}
+
+// auto-save (baseline 不在 + !failOnMissing) と explicit `updateBaseline: true`
+// の双方で使う共通の baseline 書き込み経路。decodePng で width/height を確定し、
+// match=true / diffPixels=0 を返す。
+async function writeBaseline(
+  absDir: string,
+  baselinePath: string,
+  actual: Uint8Array,
+): Promise<VisualDiffResult> {
+  await mkdir(absDir, { recursive: true });
+  await Bun.write(baselinePath, actual);
+  const actualPng = decodePng(actual);
+  return {
+    match: true,
+    diffPixels: 0,
+    totalPixels: actualPng.width * actualPng.height,
+    baselinePath,
+  };
 }
 
 function decodePng(bytes: Uint8Array): DecodedPng {

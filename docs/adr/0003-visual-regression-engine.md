@@ -190,14 +190,30 @@ ready 化時に決定する項目:
    - **推奨初期スタンス**: 案 A。`expect()` を bun:test の matcher 拡張で書くと runtime 結合が深くなり SDK 単独利用 (`bunx gtk4-e2e ...`) で扱いづらいため。
 2. **baseline 格納先**: 親タスク文では `packages/demo/scenarios/__screenshots__/<scenario>-<name>.png`。**commit 対象** にすべきか別 storage (Git LFS / CI artifact + ハッシュ参照) か。
    - 推奨初期スタンス: **commit 対象**。screenshot サイズが小さい (<200 KB/枚 想定) うちは git で扱う方が CI 設定が単純。LFS は consumer ニーズで重くなったタイミングで再評価。
+   - **決定 (T020-B 2026-05-10)**: **commit 対象** で確定。`__screenshots__/` ディレクトリは scenario と同階層に置き、`.gitignore` に追加しない。SDK 側は wrapper (`E2EClient.expectScreenshot`) で「`opts.baselineDir > opts.testFile > env GTK4_E2E_BASELINE_DIR > Error().stack 推定 > <cwd>/__screenshots__`」の優先順位で baseline ディレクトリを解決する (実装 §"Resolved Decisions" 参照)。Git LFS は当面採用せず、200 KB/枚 を有意に超えた段階で再評価する未決事項として残す。
 3. **threshold default**: 0.1 (pixelmatch native) / 0.2 (Playwright 慣例) / それ以外。
    - 推奨初期スタンス: **0.2** (Playwright 互換)。GTK theme + xvfb の AA noise を吸収する余裕として 0.1 は厳しめ。
 4. **初回実行時 (baseline 不在) の挙動**: 自動生成 / `--update-baseline` 明示まで fail のどちらか。
    - 推奨初期スタンス: **明示まで fail + わかりやすい error message**。Playwright は default で auto-create するが、CI で baseline drift を見落とす事故が起きやすい。`bunx gtk4-e2e screenshot --update-baseline <name>` の明示更新を推す。
+   - **変更 (T020-B 2026-05-10)**: 元推奨「明示まで fail」を**撤回**し「auto-save + `process.env.CI === "true"` 検出時のみ fail」を採る (Playwright 慣例と整合)。元懸念 (CI で baseline drift を見落とす事故) は CI 検出により完全にカバーされるため。`opts.failOnMissing` を pure function (`expectScreenshot`) の API に追加し、wrapper (`E2EClient.expectScreenshot`) が CI 判定 → `failOnMissing` を導出する。`opts.updateBaseline=true` は引き続き「無条件で baseline を上書きする」最優先パスとして残る。
 5. **anti-aliasing 対策の方針**: pixelmatch の `includeAA: false` (= AA 検出して無視) を採るか、CI が決定論的なので `includeAA: true` (= AA 込みで厳密判定) を採るか。
    - 推奨初期スタンス: **`includeAA: false` (default)**。GTK theme は CI で固定だが、xvfb のサブピクセル AA 差は OS / Cairo バージョンで微妙にぶれ得るので緩めに開始し、flake が出ない範囲で締める。
 6. **diff artifact の CI 保持期間**: GitHub Actions の `actions/upload-artifact` で baseline / actual / diff の 3 枚を残す保持期間 (default 90 日 / 短縮するか) と、failure 時のみ upload するか毎回 upload するか。
    - 推奨初期スタンス: **failure 時のみ upload、保持 30 日**。
+7. **filename 規約の見直し** (新規、T020-B 2026-05-10 追加): 現規約 `<scenario_basename including ext>-<name>.png` (例 `foo.spec.ts-button.png`) は親タスク本文に従って採用したが、拡張子重複 (`.spec.ts-`) の見た目が独特。将来 `<basename without ext>-<name>.png` (例 `foo-button.png`) 案で再議論する余地を残す。判断保留 (再議論時期未定)。
+8. **path traversal 安全性** (新規、T020-B 2026-05-10 追加): `expectScreenshot(actual, name)` の `name` に `../` を含めた場合の挙動 (rejection / slugify / `/` namespace) は別タスクで扱う。本 ADR / T020-B のスコープ外。
+
+## Resolved Decisions (T020-B 2026-05-10)
+
+§Open Questions §2 / §4 の決定 block と並んで、実装で確定した補助判断を以下に記録する (README は寿命短、ADR を正本とする)。
+
+- **env 名**: `GTK4_E2E_BASELINE_DIR` を正式採用。既存 `GTK4_E2E_TOKEN` (`packages/client/src/client.ts`) と prefix を揃え、プロジェクト全体での grep 容易性・名前空間衝突回避を優先。`PWTEST_BASELINE_DIR` 等の Playwright 互換 env と共用する実利は乏しいため不採用。
+- **filename 規約**: `<scenario_basename>-<name>.png`。`<scenario_basename>` はテストファイルの **拡張子を含む** basename (例 `foo.spec.ts`)。最終的なファイル名は `foo.spec.ts-button.png` の形を取る。`.spec.ts-` の重複ドットは見た目が独特だが、OS / Git / Bun 上の動作には支障なし。タスク本文の確定要件に従う。将来 `<basename without ext>-<name>.png` 案で再議論する余地は §Open Questions §7 で残してある。
+- **API 命名**: `ExpectScreenshotOptions.failOnMissing?: boolean` を採用 (旧 sketch の `createBaselineIfMissing?: boolean` は不採用)。既存の `updateBaseline` と語彙を揃え、「失敗側を明示する boolean は他にも増えうる」運用を意識した命名。
+- **CI 検出**: `process.env.CI === "true"` (文字列一致) のみ。GitHub Actions / GitLab CI / CircleCI / Bitbucket Pipelines / Buildkite はいずれも `CI=true` を default で export するため、現運用下では取りこぼしなし。Travis 旧設定 (`CI=1`) や Jenkins ジョブ依存設定は **意図的に取りこぼす**。必要が生じれば `["true", "1"].includes(...)` 等への拡張は容易だが、「`CI=true` で揃える」運用統一を当面の正と扱う。
+- **env 参照の局所化**: pure function (`expectScreenshot`) は env を一切読まない。stack-based caller 推定 + `process.env.CI` / `process.env.GTK4_E2E_BASELINE_DIR` の取得は wrapper (`E2EClient.expectScreenshot`) のエントリポイント 1 箇所に閉じ、内部 helper には引数として inject する。bun:test のファイル間並行実行で `process.env` を書き換えるテストが他 file に leak しないようにするための原則。
+- **path traversal 安全性**: `name` のサニタイズは本 ADR / T020-B のスコープ外。後続タスクで decision を取る (§Open Questions §8)。pure function (`visualDiff.ts`) header コメントの "T022 で決定" 注記は誤誘導なので「後続タスクで決定」に書き換える。
+- **Status**: 本 ADR は引き続き **Proposed** のまま。Accepted への昇格は T020-F (実装 + demo 統合 + 親タスク完走後にまとめて) で行う。本タスクは §Open Questions §2 / §4 の方針確定に留める。
 
 ## Implementation sketch (high level)
 
@@ -216,10 +232,17 @@ export interface ExpectScreenshotOptions {
   maxDiffPixelRatio?: number;
   /** Include anti-aliased pixels in diff. Default tentatively false (= AA を無視; finalize at ready). */
   includeAA?: boolean;
-  /** baseline 不在時、自動生成するか。Default false (= fail). */
-  createBaselineIfMissing?: boolean;
+  /**
+   * baseline 不在時、throw するか。Default false (= auto-save + match=true)。
+   * wrapper (`E2EClient.expectScreenshot`) は `process.env.CI === "true"` を
+   * 検出した場合 default を true にする (T020-B 決定)。
+   * 旧 sketch にあった `createBaselineIfMissing?: boolean` は不採用。
+   */
+  failOnMissing?: boolean;
   /** baseline ディレクトリの override。Default は scenario 起点の `__screenshots__/`. */
   baselineDir?: string;
+  /** baseline を強制的に上書きする (CI/env を問わず最優先)。Default false. */
+  updateBaseline?: boolean;
 }
 
 export class E2EClient {
@@ -233,13 +256,13 @@ export class E2EClient {
 ```
 packages/demo/scenarios/
 ├── __screenshots__/
-│   ├── screenshot-main-window.png       # baseline (commit 対象)
+│   ├── screenshot.spec.ts-main-window.png   # baseline (commit 対象)
 │   └── ...
 ├── screenshot.spec.ts
 └── ...
 ```
 
-`<scenario>-<name>.png` の命名は parent task に従う。`<scenario>` は spec ファイル basename、`<name>` は `expectScreenshot` 第一引数。
+`<scenario_basename>-<name>.png` の命名は parent task に従う。`<scenario_basename>` は spec ファイルの **拡張子を含む** basename (例 `screenshot.spec.ts`)、`<name>` は `expectScreenshot` 第一引数。`.spec.ts-` の重複ドットは見た目が独特だが、当面はタスク本文の確定要件に従う (§Open Questions §7 で再議論余地)。
 
 ### CLI flag (`packages/client/src/cli.ts`)
 

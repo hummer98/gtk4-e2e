@@ -10,6 +10,9 @@
 // → TS). The hand-written `TapTarget` type that used to live here was removed
 // in plan Review C3.
 
+import { fileURLToPath } from "node:url";
+
+import { resolveBaselineDir, resolveScenarioBasename } from "./baselineResolver.ts";
 import { type DiscoverFilter, discover, type InstanceFile } from "./discover.ts";
 import {
   DiscoveryError,
@@ -34,9 +37,33 @@ import {
   type VisualDiffResult,
 } from "./visualDiff.ts";
 
+// Stack-based caller 推定で resolver / wrapper 自身のフレームを skip するための
+// 絶対パス (Step 18 / T020-B)。`import.meta.url` で実行時に取り直すので、
+// 将来 src/ 内のレイアウトが変わっても破綻しない。
+const CLIENT_FILE = fileURLToPath(import.meta.url);
+const RESOLVER_FILE = CLIENT_FILE.replace(/client\.ts$/, "baselineResolver.ts");
+const SKIP_FILES: readonly string[] = [CLIENT_FILE, RESOLVER_FILE];
+
 interface ClientOptions {
   baseUrl: string;
   token?: string;
+}
+
+export interface ClientExpectScreenshotOptions extends ExpectScreenshotOptions {
+  /**
+   * Absolute path to the calling test file. When provided, the wrapper
+   * skips stack inspection and resolves baselines under
+   * `<dirname(testFile)>/__screenshots__/`. Useful for harnesses where
+   * stack walking is fragile (bundlers, dynamic imports).
+   */
+  testFile?: string;
+  /**
+   * Inject the env subset that controls baseline resolution. Defaults to
+   * `process.env`. Tests should pass an explicit object to avoid leaking
+   * `process.env.CI` / `process.env.GTK4_E2E_BASELINE_DIR` across the
+   * bun:test parallel runner.
+   */
+  env?: { CI?: string; GTK4_E2E_BASELINE_DIR?: string };
 }
 
 type ResponseKind = "json" | "bytes" | "void";
@@ -260,11 +287,55 @@ export class E2EClient {
 
   /**
    * Capture a screenshot and compare against a baseline PNG. Convenience
-   * wrapper around `screenshot()` + `expectScreenshot()` (plan §Q2 / §Q5).
+   * wrapper around `screenshot()` + `expectScreenshot()` (plan §Q2 / §Q5,
+   * Step 18 / T020-B baseline-resolution rules).
+   *
+   * Resolution order for `baselineDir` (high → low):
+   *   1. `opts.baselineDir` (absolute, or relative to cwd)
+   *   2. `<dirname(opts.testFile)>/__screenshots__/`
+   *   3. `env.GTK4_E2E_BASELINE_DIR`
+   *   4. `<dirname(callerFile)>/__screenshots__/` from `Error().stack`
+   *   5. `<process.cwd()>/__screenshots__/` fallback
+   *
+   * `failOnMissing` defaults to `env.CI === "true"` unless caller overrides.
+   * The pure function `expectScreenshot()` stays env-agnostic.
    */
-  async expectScreenshot(name: string, opts?: ExpectScreenshotOptions): Promise<VisualDiffResult> {
+  async expectScreenshot(
+    name: string,
+    opts: ClientExpectScreenshotOptions = {},
+  ): Promise<VisualDiffResult> {
+    // env / process.env 参照は wrapper エントリポイント 1 箇所に閉じる。
+    // 以降の resolver / 内部判定はここで inject された値だけを参照する
+    // (bun:test の並行実行で leak しないようにするための原則; design-review
+    // Recommendation 2)。
+    const env = opts.env ?? process.env;
+    const callerStack = new Error().stack;
+
+    const baselineDir = resolveBaselineDir({
+      optsBaselineDir: opts.baselineDir,
+      optsTestFile: opts.testFile,
+      env: { GTK4_E2E_BASELINE_DIR: env.GTK4_E2E_BASELINE_DIR },
+      callerStack,
+      skipFiles: [...SKIP_FILES],
+    });
+
+    const scenarioBasename = resolveScenarioBasename({
+      optsTestFile: opts.testFile,
+      callerStack,
+      skipFiles: [...SKIP_FILES],
+    });
+    const fullName = scenarioBasename === null ? name : `${scenarioBasename}-${name}`;
+
+    const failOnMissing = opts.failOnMissing ?? env.CI === "true";
+
     const actual = await this.screenshot();
-    return expectScreenshot(actual, name, opts);
+    return expectScreenshot(actual, fullName, {
+      threshold: opts.threshold,
+      includeAA: opts.includeAA,
+      updateBaseline: opts.updateBaseline,
+      failOnMissing,
+      baselineDir,
+    });
   }
 
   private async _request<T>(opts: RequestOptions): Promise<T> {
