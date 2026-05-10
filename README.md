@@ -201,6 +201,9 @@ Xvfb) to produce the mp4.
 
 `process.env.CI` は `"true"` (文字列一致) のみ判定。Travis 旧設定の `CI=1` は意図的に取りこぼします — CI 側で `CI=true` を export するか `opts.failOnMissing` で明示してください。
 
+- **CI 失敗時の確認方法**: GitHub Actions の `scenarios` job が visual regression で fail した場合、`__screenshots__/<name>.actual.png` と `__screenshots__/<name>.diff.png` が `visual-regression-diff` という artifact (retention 7 日) として upload されます。Actions ページの "Artifacts" から download して、ローカルの baseline (`<name>.png`) と並べて目視で diff を確認できます。
+- **baseline 追加 / 更新 PR は明示する**: `__screenshots__/*.png` (baseline) を新規追加 / 上書きする PR は、説明欄に「visual regression baseline の追加 / `updateBaseline: true` 経由の更新」である旨を記載してください。レビュアーが PNG diff を画像として確認するきっかけになります (テキスト diff では検出できないため)。
+
 ## Claude Code integration
 
 A Claude Code plugin lives under `packages/client/claude-plugin/` with

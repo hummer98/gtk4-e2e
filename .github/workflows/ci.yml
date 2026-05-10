@@ -60,6 +60,11 @@ jobs:
 
   scenarios:
     runs-on: ubuntu-latest
+    env:
+      # T022: visualDiff の baseline-missing 判定 (process.env.CI === "true")
+      # を CI 上で明示的に発火させる。default の GITHUB_ACTIONS runner でも
+      # CI=true は export されるが、self-hosted / act 互換のため明示する。
+      CI: "true"
     steps:
       - uses: actions/checkout@v4
       - name: Install GTK4 + xvfb system deps
@@ -93,5 +98,19 @@ jobs:
           path: |
             /tmp/scenario-artifacts/
             /tmp/gtk4-e2e-demo-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Announce visual regression artifact on failure
+        if: failure()
+        run: |
+          echo "::notice::visual regression が fail した場合、actual/diff PNG は GitHub Actions artifact 'visual-regression-diff' (retention 7 days) から download できます。"
+      - name: Upload visual regression diff on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-regression-diff
+          path: |
+            **/__screenshots__/*.actual.png
+            **/__screenshots__/*.diff.png
           if-no-files-found: ignore
           retention-days: 7
