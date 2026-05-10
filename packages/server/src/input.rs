@@ -70,9 +70,16 @@ impl std::error::Error for TapError {}
 
 /// Synthesize a tap on the given widget.
 ///
-/// MVP supports `Button` only. All other widget kinds error with
-/// `UnsupportedWidget`. Visibility / sensitivity gates run first so the
-/// returned error matches the user's mental model.
+/// Supports `Button` (`emit_clicked`) plus the active-stateful trio
+/// `Switch` / `CheckButton` / `ToggleButton` via `set_active(!active)` —
+/// `Activatable` was removed in GTK4 so we toggle the per-widget property
+/// directly, which fires `notify::active` for app-side observers (T019).
+/// Other widget kinds error with `UnsupportedWidget`. Visibility / sensitivity
+/// gates run first so the returned error matches the user's mental model.
+///
+/// Dispatch order is derived → base: `gtk::CheckButton` is *not* a `gtk::Button`
+/// in GTK4 (unlike GTK3), but `gtk::ToggleButton` *is*, so we check
+/// `ToggleButton` before `Button`.
 pub fn tap_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), TapError> {
     if !widget.is_visible() || !widget.is_mapped() {
         return Err(TapError::WidgetNotVisible {
@@ -83,6 +90,18 @@ pub fn tap_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), Ta
         return Err(TapError::WidgetDisabled {
             selector: selector.map(str::to_string),
         });
+    }
+    if let Some(switch) = widget.downcast_ref::<gtk::Switch>() {
+        switch.set_active(!switch.is_active());
+        return Ok(());
+    }
+    if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+        check.set_active(!check.is_active());
+        return Ok(());
+    }
+    if let Some(toggle) = widget.downcast_ref::<gtk::ToggleButton>() {
+        toggle.set_active(!toggle.is_active());
+        return Ok(());
     }
     if let Some(button) = widget.downcast_ref::<gtk::Button>() {
         button.emit_clicked();
@@ -353,7 +372,10 @@ pub fn validate(
         }
     }
     if from.x < 0 || from.y < 0 || from.x >= w || from.y >= h {
-        return Err(SwipeError::OutOfBounds { x: from.x, y: from.y });
+        return Err(SwipeError::OutOfBounds {
+            x: from.x,
+            y: from.y,
+        });
     }
 
     let leaf = match resolve_xy(window, from.x, from.y) {

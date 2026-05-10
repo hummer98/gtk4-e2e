@@ -39,6 +39,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Type,
             Capability::Swipe,
             Capability::Elements,
+            Capability::State,
         ],
         token_required: None,
     });
@@ -50,9 +51,40 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             info,
             cmd_tx: cmd_tx.clone(),
             event_tx,
+            state: gtk4_e2e_server::state::AppDefinedState::default(),
         },
         cmd_tx,
     )
+}
+
+fn make_state_with(state: gtk4_e2e_server::state::AppDefinedState) -> AppState {
+    let info = Arc::new(Info {
+        instance_id: "test".into(),
+        pid: 0,
+        port: 0,
+        app_name: "test".into(),
+        app_version: "0".into(),
+        capabilities: vec![
+            Capability::Info,
+            Capability::Tap,
+            Capability::Wait,
+            Capability::Screenshot,
+            Capability::Events,
+            Capability::Type,
+            Capability::Swipe,
+            Capability::State,
+        ],
+        token_required: None,
+    });
+    let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    let (event_tx, _event_rx) =
+        tokio::sync::broadcast::channel::<gtk4_e2e_server::EventEnvelope>(8);
+    AppState {
+        info,
+        cmd_tx,
+        event_tx,
+        state,
+    }
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {
@@ -622,9 +654,10 @@ async fn type_capability_in_info() {
             "events",
             "type",
             "swipe",
-            "elements"
+            "elements",
+            "state",
         ],
-        "capabilities order must include type/swipe/elements at the tail"
+        "capabilities order must include type, swipe, elements, and state at the tail"
     );
 }
 
@@ -1075,4 +1108,193 @@ async fn screenshot_no_active_window_returns_422() {
         v.get("error").and_then(Value::as_str),
         Some("no_active_window")
     );
+}
+
+// ----- T019: /test/state endpoint -----
+
+#[tokio::test]
+async fn state_endpoint_returns_null_initially() {
+    // T019 §3.A.3: GET /test/state returns the snapshot, defaulting to JSON
+    // null before any `Handle::set_state` call (avoids a 404 vs. Some(value)
+    // branch on the SDK side).
+    let app = router(make_state().0);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(v, Value::Null);
+}
+
+#[tokio::test]
+async fn state_endpoint_returns_set_value() {
+    // T019 §3.A.3 + §3.A.2: a snapshot pushed via `AppDefinedState::set` is
+    // visible on subsequent GET /test/state requests.
+    let state = gtk4_e2e_server::state::AppDefinedState::default();
+    state.set(json!({"session": {"mode": "applied"}, "click_count": 3}));
+    let app = router(make_state_with(state));
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/state")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(v, json!({"session": {"mode": "applied"}, "click_count": 3}));
+}
+
+#[tokio::test]
+async fn state_capability_in_info() {
+    // Mirrors `type_capability_in_info` for `Capability::State`.
+    let app = router(make_state().0);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let caps = v
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .expect("capabilities array");
+    let cap_strs: Vec<&str> = caps.iter().filter_map(Value::as_str).collect();
+    assert!(
+        cap_strs.contains(&"state"),
+        "capabilities must include `state`, got {cap_strs:?}"
+    );
+}
+
+#[tokio::test]
+async fn wait_app_state_eq_invalid_path_422() {
+    // T019 §3.A.4 case (4): `path` not starting with `/` and non-empty
+    // is rejected up-front by the HTTP layer with 422 invalid_path.
+    let app = router(make_state().0);
+    let body = json!({
+        "condition": {
+            "kind": "app_state_eq",
+            "path": "foo",
+            "value": "bar",
+        },
+        "timeout_ms": 100,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/wait")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_path"));
+}
+
+#[tokio::test]
+async fn wait_app_state_eq_root_match_returns_200() {
+    // T019 §3.A.4 case (1): empty path resolves to the entire snapshot;
+    // a matching value yields 200.
+    let state = gtk4_e2e_server::state::AppDefinedState::default();
+    state.set(json!({"hello": "world"}));
+    let app = router(make_state_with(state));
+    let body = json!({
+        "condition": {
+            "kind": "app_state_eq",
+            "path": "",
+            "value": {"hello": "world"},
+        },
+        "timeout_ms": 1000,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/wait")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert!(v.get("elapsed_ms").is_some());
+}
+
+#[tokio::test]
+async fn wait_app_state_eq_value_mismatch_times_out_408() {
+    // T019 §3.A.4 case (2): path resolves but the value differs. NotYet →
+    // 408 timeout.
+    let state = gtk4_e2e_server::state::AppDefinedState::default();
+    state.set(json!({"session": {"mode": "applied"}}));
+    let app = router(make_state_with(state));
+    let body = json!({
+        "condition": {
+            "kind": "app_state_eq",
+            "path": "/session/mode",
+            "value": "pending",
+        },
+        "timeout_ms": 250,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/wait")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("wait_timeout"));
+}
+
+#[tokio::test]
+async fn wait_app_state_eq_path_missing_times_out_408() {
+    // T019 §3.A.4 case (3): path does not resolve. NotYet → 408.
+    let app = router(make_state().0);
+    let body = json!({
+        "condition": {
+            "kind": "app_state_eq",
+            "path": "/no/such/key",
+            "value": "anything",
+        },
+        "timeout_ms": 250,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/wait")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
 }

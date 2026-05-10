@@ -25,6 +25,8 @@ mod schema_export;
 #[cfg(feature = "e2e")]
 pub mod snapshot;
 #[cfg(feature = "e2e")]
+pub mod state;
+#[cfg(feature = "e2e")]
 pub mod tree;
 #[cfg(feature = "e2e")]
 pub mod wait;
@@ -57,6 +59,7 @@ mod start_impl {
     use crate::port::pick_free_listener;
     use crate::proto::{Capability, EventEnvelope, Info};
     use crate::registry::{delete_instance_file, runtime_dir, write_instance_file, InstanceFile};
+    use crate::state::AppDefinedState;
 
     /// Live handle to a running in-process e2e server.
     ///
@@ -68,6 +71,7 @@ mod start_impl {
         registry_path: Option<PathBuf>,
         info: Arc<Info>,
         event_tx: tokio::sync::broadcast::Sender<EventEnvelope>,
+        state: AppDefinedState,
     }
 
     impl Handle {
@@ -98,6 +102,17 @@ mod start_impl {
         /// dropping the event when no test client is attached.
         pub fn event_tx(&self) -> tokio::sync::broadcast::Sender<EventEnvelope> {
             self.event_tx.clone()
+        }
+
+        /// Replace the app-defined state snapshot exposed at `GET /test/state`.
+        ///
+        /// Subsequent `WaitCondition::AppStateEq { path, value }` polls observe
+        /// the new snapshot. The semantics are *whole-snapshot replace* —
+        /// callers that want to merge are responsible for assembling the full
+        /// JSON before calling `set_state`. See `packages/demo/src/main.rs` for
+        /// the accumulator pattern (T019).
+        pub fn set_state(&self, value: serde_json::Value) {
+            self.state.set(value);
         }
     }
 
@@ -140,6 +155,7 @@ mod start_impl {
                 Capability::Type,
                 Capability::Swipe,
                 Capability::Elements,
+                Capability::State,
             ],
             token_required: token.as_ref().map(|_| true),
         });
@@ -174,10 +190,12 @@ mod start_impl {
         let (event_tx, _event_rx) = tokio::sync::broadcast::channel::<EventEnvelope>(256);
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+        let app_state = AppDefinedState::default();
         let state = AppState {
             info: info.clone(),
             cmd_tx,
             event_tx: event_tx.clone(),
+            state: app_state.clone(),
         };
         let app_router = router(state);
 
@@ -199,6 +217,7 @@ mod start_impl {
             registry_path: Some(registry_path),
             info,
             event_tx,
+            state: app_state,
         })
     }
 

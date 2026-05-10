@@ -5,12 +5,10 @@
 // Skipped when no GUI display is detected. CI runs this under xvfb so the
 // `DISPLAY` env makes `hasDisplay()` true.
 
-import { existsSync, mkdirSync } from "node:fs";
-
 import { describe, expect, test } from "bun:test";
-
-import { HttpError } from "../../client/src/errors.ts";
+import { existsSync, mkdirSync } from "node:fs";
 import type { E2EClient } from "../../client/src/client.ts";
+import { HttpError } from "../../client/src/errors.ts";
 
 import { hasDisplay, spawnDemo } from "./_setup.ts";
 

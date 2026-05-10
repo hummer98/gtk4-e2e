@@ -100,15 +100,14 @@ fn swipe_duration_too_long_returns_error() {
     window.present();
     common::pump_glib(64);
 
-    let err = swipe(
-        &window,
-        XY { x: 100, y: 200 },
-        XY { x: 100, y: 50 },
-        10_001,
-    )
-    .unwrap_err();
+    let err = swipe(&window, XY { x: 100, y: 200 }, XY { x: 100, y: 50 }, 10_001).unwrap_err();
     assert!(
-        matches!(err, SwipeError::DurationTooLong { duration_ms: 10_001 }),
+        matches!(
+            err,
+            SwipeError::DurationTooLong {
+                duration_ms: 10_001
+            }
+        ),
         "got {err:?}"
     );
 
@@ -130,7 +129,10 @@ fn swipe_out_of_bounds_returns_error() {
 
     let err = swipe(
         &window,
-        XY { x: 10_000, y: 10_000 },
+        XY {
+            x: 10_000,
+            y: 10_000,
+        },
         XY { x: 100, y: 50 },
         100,
     )
@@ -177,13 +179,8 @@ fn swipe_modifies_vadjustment_value() {
     // Upward swipe: from (100, 400) to (100, 100) over 200 ms.
     // dy = 400 - 100 = 300 → vadjustment.value should increase by 300 (clamped
     // to upper - page_size).
-    swipe(
-        &window,
-        XY { x: 100, y: 400 },
-        XY { x: 100, y: 100 },
-        200,
-    )
-    .expect("swipe should succeed for in-bounds ScrolledWindow target");
+    swipe(&window, XY { x: 100, y: 400 }, XY { x: 100, y: 100 }, 200)
+        .expect("swipe should succeed for in-bounds ScrolledWindow target");
 
     common::pump_glib_for(Duration::from_millis(400));
 

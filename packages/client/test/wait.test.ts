@@ -117,4 +117,27 @@ describe("E2EClient.wait", () => {
     const last = mock.receivedBodies.at(-1);
     expect((last?.body as { timeout_ms: number }).timeout_ms).toBe(5000);
   });
+
+  test("serialises app_state_eq with path / value", async () => {
+    mock = startMock({
+      wait: () =>
+        new Response(JSON.stringify({ elapsed_ms: 7 }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    const cond: WaitCondition = {
+      kind: "app_state_eq",
+      path: "/session/mode",
+      value: "applied",
+    };
+    const r = await client.wait(cond, { timeoutMs: 1000 });
+    expect(r.elapsed_ms).toBe(7);
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.body).toEqual({
+      condition: { kind: "app_state_eq", path: "/session/mode", value: "applied" },
+      timeout_ms: 1000,
+    });
+  });
 });

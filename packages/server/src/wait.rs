@@ -17,6 +17,7 @@ use crate::gtk::prelude::*;
 use crate::input::{resolve_xy, tap_widget, type_text, SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
 use crate::proto::{TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
+use crate::state::AppDefinedState;
 use crate::tree::{find_first, parse_selector, GtkTree, WidgetTree};
 
 /// Polling interval (plan §Q7: fixed 100 ms internal).
@@ -49,8 +50,11 @@ pub const MAX_TIMEOUT_MS: u64 = 600_000;
 
 /// Polling driver. Round-trips through `cmd_tx` once per tick; returns 200's
 /// `WaitResult { elapsed_ms }` on match, `WaitError::Timeout` on deadline.
+///
+/// `app_state` is read directly (no GLib round-trip) for `AppStateEq` ticks.
 pub async fn poll_until(
     cmd_tx: &mpsc::Sender<MainCmd>,
+    app_state: AppDefinedState,
     condition: WaitCondition,
     timeout_ms: u64,
 ) -> Result<WaitResult, WaitError> {
@@ -63,17 +67,25 @@ pub async fn poll_until(
     let started = Instant::now();
     let deadline = started + Duration::from_millis(timeout_ms);
     loop {
-        let (tx, rx) = oneshot::channel();
-        cmd_tx
-            .send(MainCmd::EvalWait {
-                condition: condition.clone(),
-                reply: tx,
-            })
-            .await
-            .map_err(|_| WaitError::Internal("main_thread channel closed".into()))?;
-        let tick = rx
-            .await
-            .map_err(|_| WaitError::Internal("main_thread reply dropped".into()))?;
+        let tick = match &condition {
+            // App-defined state lives outside GTK, so read it directly without
+            // round-tripping through the GLib main thread (`MainCmd::EvalWait`).
+            // This keeps state push → poll latency below the GLib iteration
+            // cost when state is updated frequently.
+            WaitCondition::AppStateEq { path, value } => eval_app_state_eq(&app_state, path, value),
+            _ => {
+                let (tx, rx) = oneshot::channel();
+                cmd_tx
+                    .send(MainCmd::EvalWait {
+                        condition: condition.clone(),
+                        reply: tx,
+                    })
+                    .await
+                    .map_err(|_| WaitError::Internal("main_thread channel closed".into()))?;
+                rx.await
+                    .map_err(|_| WaitError::Internal("main_thread reply dropped".into()))?
+            }
+        };
         match tick {
             WaitTickResult::Outcome(WaitTickOutcome::Matched) => {
                 return Ok(WaitResult {
@@ -91,6 +103,20 @@ pub async fn poll_until(
         }
         let next = min(now + POLL_INTERVAL, deadline);
         tokio::time::sleep_until(next.into()).await;
+    }
+}
+
+/// Evaluate one tick of `WaitCondition::AppStateEq` against the app-defined
+/// state snapshot (T019).
+///
+/// `path` is RFC 6901 (already statically validated to be `""` or to start
+/// with `/` by the HTTP layer). Resolution failures (intermediate node
+/// missing, value mismatch) are reported as `NotYet`, letting transient
+/// schema drift surface as 408 timeout rather than a permanent failure.
+pub fn eval_app_state_eq(app_state: &AppDefinedState, path: &str, value: &Value) -> WaitTickResult {
+    match app_state.pointer(path) {
+        Some(v) if &v == value => WaitTickResult::Outcome(WaitTickOutcome::Matched),
+        Some(_) | None => WaitTickResult::Outcome(WaitTickOutcome::NotYet),
     }
 }
 
@@ -259,6 +285,15 @@ where
                 },
             }
         }
+        // App-defined state has no GTK widget bound, so it must not reach the
+        // tree-based evaluator. `poll_until` (and any future poll driver) is
+        // expected to short-circuit `AppStateEq` via `eval_app_state_eq`. If
+        // the tree path is ever hit (e.g. someone routes `MainCmd::EvalWait`
+        // to this for an `AppStateEq` payload), surface a permanent error so
+        // the bug is visible rather than silently looping.
+        WaitCondition::AppStateEq { .. } => WaitTickResult::PermanentFailure(
+            WaitEvalError::Internal("AppStateEq routed through tree evaluator".into()),
+        ),
     }
 }
 

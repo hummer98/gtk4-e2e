@@ -17,10 +17,7 @@ async function waitForScroll(client: Awaited<ReturnType<typeof spawnDemo>>["clie
   // the widget is `is_visible_and_mapped`; we then sleep briefly to give the
   // macOS quartz backend a chance to settle the toplevel allocation, which is
   // observed to lag a frame behind child mapping.
-  await client.wait(
-    { kind: "selector_visible", selector: "#scroll1" },
-    { timeoutMs: 3000 },
-  );
+  await client.wait({ kind: "selector_visible", selector: "#scroll1" }, { timeoutMs: 3000 });
   await new Promise((res) => setTimeout(res, 200));
 }
 

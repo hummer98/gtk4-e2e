@@ -24,7 +24,8 @@ pub struct Info {
 /// extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.
 /// Step 7 appends `Events` for the `WS /test/events` channel.
 /// Step 9 appends `Type` (T013) for `POST /test/type` and `Swipe` (T014) for `POST /test/swipe`.
-/// Step 14 appends `Elements` for `GET /test/elements`.
+/// Step 14 appends `Elements` (T018) for `GET /test/elements`.
+/// T019 appends `State` for `GET /test/state` (app-defined state snapshot).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -36,6 +37,7 @@ pub enum Capability {
     Type,
     Swipe,
     Elements,
+    State,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -91,6 +93,13 @@ pub struct SwipeRequest {
 /// Condition long-polled by `/test/wait`.
 ///
 /// Tagged on `kind` so SDK consumers can narrow the union by discriminator.
+///
+/// T019 appends `AppStateEq` for app-defined state snapshots: `path` is a
+/// JSON Pointer (RFC 6901, e.g. `""` for root or `/foo/bar`) into the state
+/// pushed via `Handle::set_state`. Path resolution failure is treated as a
+/// tick failure so that schema drift on the app side surfaces as 408 timeout
+/// rather than a permanent 422 (HTTP layer still rejects leading-`/`-missing
+/// paths up-front via static validation).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WaitCondition {
@@ -100,6 +109,10 @@ pub enum WaitCondition {
     StateEq {
         selector: String,
         property: String,
+        value: serde_json::Value,
+    },
+    AppStateEq {
+        path: String,
         value: serde_json::Value,
     },
 }

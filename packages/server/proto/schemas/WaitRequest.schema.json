@@ -3,7 +3,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "WaitCondition": {
-      "description": "Condition long-polled by `/test/wait`.\n\nTagged on `kind` so SDK consumers can narrow the union by discriminator.",
+      "description": "Condition long-polled by `/test/wait`.\n\nTagged on `kind` so SDK consumers can narrow the union by discriminator.\n\nT019 appends `AppStateEq` for app-defined state snapshots: `path` is a JSON Pointer (RFC 6901, e.g. `\"\"` for root or `/foo/bar`) into the state pushed via `Handle::set_state`. Path resolution failure is treated as a tick failure so that schema drift on the app side surfaces as 408 timeout rather than a permanent 422 (HTTP layer still rejects leading-`/`-missing paths up-front via static validation).",
       "oneOf": [
         {
           "properties": {
@@ -43,6 +43,26 @@
             "kind",
             "property",
             "selector",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "app_state_eq"
+              ],
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "kind",
+            "path",
             "value"
           ],
           "type": "object"

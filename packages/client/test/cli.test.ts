@@ -62,8 +62,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
-      if (url.pathname === "/test/elements" && handlers.elements)
-        return handlers.elements(url);
+      if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
       return new Response("not found", { status: 404 });
     },
   });
@@ -265,13 +264,7 @@ describe("cli swipe", () => {
   test("default duration is 300ms when --duration omitted", async () => {
     mock = startMock({ swipe: () => new Response(null, { status: 200 }) });
 
-    const result = await runCli([
-      "swipe",
-      "10,20",
-      "30,40",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["swipe", "10,20", "30,40", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(0);
     expect(mock.receivedBodies.at(-1)?.body).toEqual({
       from: { x: 10, y: 20 },
@@ -288,13 +281,7 @@ describe("cli swipe", () => {
   test("negative coordinates exit 2 (parseSwipeXY non-negative only)", async () => {
     mock = startMock({ swipe: () => new Response(null, { status: 200 }) });
 
-    const result = await runCli([
-      "swipe",
-      "-100,100",
-      "100,100",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["swipe", "-100,100", "100,100", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain("non-negative");
   });
@@ -401,39 +388,24 @@ describe("cli elements", () => {
   test("--max-depth with negative value exits 2", async () => {
     mock = startMock({ elements: () => Response.json(sampleResp) });
 
-    const result = await runCli([
-      "elements",
-      "--max-depth",
-      "-1",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["elements", "--max-depth", "-1", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(2);
   });
 
   test("--max-depth with non-integer value exits 2", async () => {
     mock = startMock({ elements: () => Response.json(sampleResp) });
 
-    const result = await runCli([
-      "elements",
-      "--max-depth",
-      "abc",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["elements", "--max-depth", "abc", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(2);
   });
 
   test("501 from server exits 3 (NotImplementedError)", async () => {
     mock = startMock({
       elements: () =>
-        new Response(
-          JSON.stringify({ error: "not_implemented", capability: "elements" }),
-          {
-            status: 501,
-            headers: { "content-type": "application/json" },
-          },
-        ),
+        new Response(JSON.stringify({ error: "not_implemented", capability: "elements" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
     });
 
     const result = await runCli(["elements", "--port", String(mock.port)]);

@@ -144,3 +144,94 @@ fn widget_disabled_returns_error() {
     window.close();
     common::pump_glib(32);
 }
+
+// ----- T019: tap dispatch for Switch / CheckButton / ToggleButton -----
+
+fn build_window_with<F>(widget_id: &str, build: F) -> (gtk::ApplicationWindow, gtk::Widget)
+where
+    F: FnOnce(&str) -> gtk::Widget,
+{
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.input-tap-toggle")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+    let widget = build(widget_id);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .child(&widget)
+        .build();
+    (window, widget)
+}
+
+#[test]
+fn switch_tap_toggles_active() {
+    if !require_display() {
+        return;
+    }
+    let (window, widget) = build_window_with("switch1", |id| {
+        let s = gtk::Switch::builder().active(false).build();
+        s.set_widget_name(id);
+        s.upcast()
+    });
+    window.present();
+    common::pump_glib(64);
+
+    let switch = widget.downcast_ref::<gtk::Switch>().unwrap();
+    assert!(!switch.is_active(), "precondition: starts inactive");
+    tap_widget(&widget, Some("#switch1")).expect("switch tap should succeed");
+    common::pump_glib(32);
+    assert!(switch.is_active(), "switch should toggle to active");
+
+    tap_widget(&widget, Some("#switch1")).expect("switch tap should toggle back");
+    common::pump_glib(32);
+    assert!(!switch.is_active(), "second tap should toggle off");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn check_button_tap_toggles_active() {
+    if !require_display() {
+        return;
+    }
+    let (window, widget) = build_window_with("check1", |id| {
+        let c = gtk::CheckButton::with_label("Subscribe");
+        c.set_widget_name(id);
+        c.upcast()
+    });
+    window.present();
+    common::pump_glib(64);
+
+    let check = widget.downcast_ref::<gtk::CheckButton>().unwrap();
+    assert!(!check.is_active(), "precondition: starts inactive");
+    tap_widget(&widget, Some("#check1")).expect("check tap should succeed");
+    common::pump_glib(32);
+    assert!(check.is_active(), "check button should toggle to active");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn toggle_button_tap_toggles_active() {
+    if !require_display() {
+        return;
+    }
+    let (window, widget) = build_window_with("toggle1", |id| {
+        let t = gtk::ToggleButton::with_label("Toggle");
+        t.set_widget_name(id);
+        t.upcast()
+    });
+    window.present();
+    common::pump_glib(64);
+
+    let toggle = widget.downcast_ref::<gtk::ToggleButton>().unwrap();
+    assert!(!toggle.is_active(), "precondition: starts inactive");
+    tap_widget(&widget, Some("#toggle1")).expect("toggle tap should succeed");
+    common::pump_glib(32);
+    assert!(toggle.is_active(), "toggle button should toggle to active");
+
+    window.close();
+    common::pump_glib(32);
+}

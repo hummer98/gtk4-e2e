@@ -99,7 +99,8 @@ fn capability_includes_tap_wait() {
 fn capability_enum_order_is_anchored() {
     // Plan §Q5 / Step 9: Capability ordering must match the surfaced order.
     // Step 7 anchored Events at the tail; Step 9 appends Type (T013) and
-    // Swipe (T014) after Events. Step 14 appends Elements (T018) at the tail.
+    // Swipe (T014) after Events. Step 14 appends Elements (T018);
+    // T019 appends State for `GET /test/state` at the tail.
     let tmp = tempfile::tempdir().unwrap();
     write_schemas(tmp.path()).unwrap();
 
@@ -120,9 +121,10 @@ fn capability_enum_order_is_anchored() {
             "events",
             "type",
             "swipe",
-            "elements"
+            "elements",
+            "state",
         ],
-        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements]"
+        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements, state]"
     );
 }
 
@@ -145,6 +147,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Type,
             gtk4_e2e_server::Capability::Swipe,
             gtk4_e2e_server::Capability::Elements,
+            gtk4_e2e_server::Capability::State,
         ],
         token_required: None,
     };
@@ -159,7 +162,44 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Type,
             gtk4_e2e_server::Capability::Swipe,
             gtk4_e2e_server::Capability::Elements,
+            gtk4_e2e_server::Capability::State,
         ]
+    );
+}
+
+#[test]
+fn capability_includes_state() {
+    // T019: `Capability::State` must appear in the schema enum (snake_case).
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+    let bytes = fs::read(tmp.path().join("Capability.schema.json")).unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = v
+        .get("enum")
+        .and_then(Value::as_array)
+        .expect("Capability schema should have enum array");
+    assert!(
+        arr.iter().any(|e| e == &Value::String("state".into())),
+        "expected `state` variant in {arr:?}"
+    );
+}
+
+#[test]
+fn wait_condition_has_app_state_eq() {
+    // T019: `WaitCondition::AppStateEq { path, value }` must surface in the
+    // generated schema with `kind = "app_state_eq"` and a `path` property.
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+    let bytes = fs::read(tmp.path().join("WaitCondition.schema.json")).unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let s = serde_json::to_string(&v).unwrap();
+    assert!(
+        s.contains("app_state_eq"),
+        "WaitCondition schema should mention `app_state_eq` discriminator: {s}"
+    );
+    assert!(
+        s.contains("\"path\""),
+        "WaitCondition schema should expose `path` for app_state_eq: {s}"
     );
 }
 

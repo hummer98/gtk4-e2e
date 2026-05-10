@@ -8,7 +8,7 @@
 
 import { readdirSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join, resolve, dirname } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { compileFromFile } from "json-schema-to-typescript";

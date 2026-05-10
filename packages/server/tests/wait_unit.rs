@@ -16,8 +16,11 @@ use serde_json::json;
 
 use gtk4_e2e_server::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
 use gtk4_e2e_server::proto::{WaitCondition, WaitResult};
+use gtk4_e2e_server::state::AppDefinedState;
 use gtk4_e2e_server::tree::WidgetTree;
-use gtk4_e2e_server::wait::{eval_condition, poll_until, PropReadError, WaitError, WidgetLike};
+use gtk4_e2e_server::wait::{
+    eval_app_state_eq, eval_condition, poll_until, PropReadError, WaitError, WidgetLike,
+};
 
 // ---------------------------------------------------------------
 // Mock tree
@@ -233,6 +236,7 @@ async fn matches_within_timeout() {
 
     let result: Result<WaitResult, WaitError> = poll_until(
         &tx,
+        AppDefinedState::default(),
         WaitCondition::SelectorVisible {
             selector: "#btn1".into(),
         },
@@ -254,6 +258,7 @@ async fn times_out() {
 
     let err = poll_until(
         &tx,
+        AppDefinedState::default(),
         WaitCondition::SelectorVisible {
             selector: "#btn1".into(),
         },
@@ -278,6 +283,7 @@ async fn selector_not_found_treated_as_tick_failure() {
 
     let r = poll_until(
         &tx,
+        AppDefinedState::default(),
         WaitCondition::SelectorVisible {
             selector: "#btn1".into(),
         },
@@ -294,6 +300,7 @@ async fn rejects_zero_timeout() {
     let (tx, _rx) = tokio::sync::mpsc::channel::<MainCmd>(1);
     let err = poll_until(
         &tx,
+        AppDefinedState::default(),
         WaitCondition::SelectorVisible {
             selector: "#btn1".into(),
         },
@@ -309,6 +316,7 @@ async fn rejects_excessive_timeout() {
     let (tx, _rx) = tokio::sync::mpsc::channel::<MainCmd>(1);
     let err = poll_until(
         &tx,
+        AppDefinedState::default(),
         WaitCondition::SelectorVisible {
             selector: "#btn1".into(),
         },
@@ -330,6 +338,7 @@ async fn permanent_failure_propagates_immediately() {
 
     let err = poll_until(
         &tx,
+        AppDefinedState::default(),
         WaitCondition::StateEq {
             selector: "#label1".into(),
             property: "color".into(),
@@ -343,6 +352,73 @@ async fn permanent_failure_propagates_immediately() {
         WaitError::Eval(WaitEvalError::UnsupportedPropertyType(_)) => {}
         other => panic!("expected UnsupportedPropertyType, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------
+// T019: app-defined state — eval_app_state_eq + poll_until via AppStateEq.
+// ---------------------------------------------------------------
+
+#[test]
+fn app_state_eq_root_pointer_matches() {
+    // §3.A.4 case (1): empty path resolves to the entire snapshot.
+    let state = AppDefinedState::default();
+    state.set(json!({"hello": "world"}));
+    let r = eval_app_state_eq(&state, "", &json!({"hello": "world"}));
+    assert_eq!(r, WaitTickResult::Outcome(WaitTickOutcome::Matched));
+}
+
+#[test]
+fn app_state_eq_matches_when_path_resolves() {
+    // §3.A.4 補強: deep pointer match.
+    let state = AppDefinedState::default();
+    state.set(json!({"session": {"mode": "applied"}}));
+    let r = eval_app_state_eq(&state, "/session/mode", &json!("applied"));
+    assert_eq!(r, WaitTickResult::Outcome(WaitTickOutcome::Matched));
+}
+
+#[test]
+fn app_state_eq_not_yet_when_value_differs() {
+    // §3.A.4 case (2): path resolves but the value differs.
+    let state = AppDefinedState::default();
+    state.set(json!({"session": {"mode": "applied"}}));
+    let r = eval_app_state_eq(&state, "/session/mode", &json!("pending"));
+    assert_eq!(r, WaitTickResult::Outcome(WaitTickOutcome::NotYet));
+}
+
+#[test]
+fn app_state_eq_not_yet_when_path_missing() {
+    // §3.A.4 case (3): path does not resolve. Treated as a tick failure
+    // so transient app-side schema drift surfaces as 408 timeout.
+    let state = AppDefinedState::default();
+    state.set(json!({"session": {"mode": "applied"}}));
+    let r = eval_app_state_eq(&state, "/no/such/key", &json!("anything"));
+    assert_eq!(r, WaitTickResult::Outcome(WaitTickOutcome::NotYet));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn poll_until_app_state_eq_matches_after_set() {
+    // poll_until short-circuits AppStateEq and reads `app_state` directly,
+    // so the `MainCmd` channel is never touched. Verify a delayed `set`
+    // still trips the matcher within the deadline.
+    let (tx, _rx) = tokio::sync::mpsc::channel::<MainCmd>(1);
+    let state = AppDefinedState::default();
+    let state_clone = state.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        state_clone.set(json!({"session": {"mode": "applied"}}));
+    });
+    let r = poll_until(
+        &tx,
+        state,
+        WaitCondition::AppStateEq {
+            path: "/session/mode".into(),
+            value: json!("applied"),
+        },
+        2_000,
+    )
+    .await
+    .expect("should match within timeout once state is set");
+    assert!(r.elapsed_ms <= 2_000);
 }
 
 // silence unused warnings on Duration / RefCell when test attrs strip them

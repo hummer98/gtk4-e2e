@@ -86,7 +86,7 @@ POST   /test/pinch       { center, scale, duration_ms }
 POST   /test/type        { selector, text }
 POST   /test/wait        { condition, timeout_ms }   # long-polling、Playwright の waitFor 相当
 GET    /test/screenshot                              # PNG
-GET    /test/state                                   # app state snapshot
+GET    /test/state                                   # app state snapshot (Handle::set_state で push、初期 null)
 POST   /test/eval        { script }                  # optional / future
 ```
 

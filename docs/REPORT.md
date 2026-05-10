@@ -118,8 +118,8 @@ ADR-0001 §Verification Phase 1 (本 ADR の妥当性検証 5 項目) は Step 1
 
 - **type / swipe / pinch** (Step 9): T010 でメタ計画化、T013 / T014 / T015 を draft / low priority で起票済。consumer ニーズが固まった subtask から `ready` 昇格させる運用。
 - **eval** (`POST /test/eval`): seed.md §4 で「optional / future」、ADR-0001 で「専用 mutator endpoint で代替か Lua sandbox か」未確定。subtask 起票なし、ADR 化が前提。
-- **`/test/state`** endpoint と `state_eq { path: "session.mode" }` の app-defined state schema 設計 (T006 Open Q-C)。
-- **Activatable / Switch / CheckButton tap 対応**: T006 で Button のみ MVP、Switch は `notify::active`、CheckButton は `Activatable::activate` で signal 戦略が分岐するため Step 9 まとめての再設計推奨。
+- ~~**`/test/state`** endpoint と `state_eq { path: "session.mode" }` の app-defined state schema 設計 (T006 Open Q-C)~~ → **完了 (T019)**: `Capability::State` 追加、`Handle::set_state(json)` API、`WaitCondition::AppStateEq { path, value }` (JSON Pointer / RFC 6901)、SDK `client.state()` を整備。
+- ~~**Activatable / Switch / CheckButton tap 対応**~~ → **完了 (T019)**: `tap_widget` を派生クラス → 基底クラスの順で downcast する dispatch 構造に変更し、`Switch` / `CheckButton` / `ToggleButton` で `set_active(!active)` を発火。GTK4 では `Activatable` interface は削除済みのため `gtk::Widget` の派生別 toggle に統一。
 - **`/test/elements`** widget tree query endpoint は未実装 (現状 server 側で walk するのは `find_first` のみ)。
 - **`Capability::VideoStream`** (`WS /test/video/stream`): 現 ffmpeg X11 capture で十分なので未実装、必要が顕在化したら追加。
 
@@ -138,7 +138,7 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 - ~~**Biome 未導入**~~ → **完了 (T017)**: ルートに `biome.json` を追加、`packages/client/package.json` の `lint` / `fmt:check` を biome 実体化、CI bun job で `bun run lint` / `bun run fmt:check` を実行。
 - ~~**`tsc --noEmit` を CI に未連携**~~ → **完了 (T017)**: TS2322 baseline 2 件 (`cli.test.ts:67` / `events.test.ts:49` の `Bun.serve(...).port` narrowing) を非 null assertion で解消、CI bun job に `tsc --noEmit (packages/client)` step を追加。
 - **`InstanceFile` の SSOT 化**: registry file format `InstanceFile` は現在 SDK 側 (TS) と server 側 (Rust) で別個に書かれている (ADR-0002 Open Question)。
-- **`packages/server/src/cli.ts` の executable bit 変更** (T006): Conductor 判断保留のまま `100755` 状態。
+- ~~**`packages/server/src/cli.ts` の executable bit 変更** (T006)~~ → **完了 (T019)**: 実体は `packages/client/src/cli.ts` (server 配下には存在しない、prompt 表記の誤記) で、`100755` で commit 済み (`b30903e7`) を再確認し追認。shebang `#!/usr/bin/env bun` 付きで `bunx gtk4-e2e` / `bun run …/cli.ts` 双方から呼べる。
 - **手動検証 skip 項目**: T003 の window close → registry cleanup、T009 の Claude Code 上 plugin install、T011 の Linux X11 golden path は CI / display 持ちレビュアーに委譲。
 
 ### ADR-0002 の status
@@ -183,10 +183,10 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 
 - **T013 type / T014 swipe / T015 pinch** を consumer ニーズに応じて順次 `ready` 化、実装。推奨着手順: type → swipe → pinch (T010)。
 - **`/test/elements`** widget tree query endpoint。
-- **`/test/state`** + state_eq path schema 設計 (T006 Open Q-C)。
-- **Activatable / Switch / CheckButton tap 対応** (T006 申し送り)。
+- ~~**`/test/state`** + state_eq path schema 設計 (T006 Open Q-C)~~ → **完了 (T019)**。
+- ~~**Activatable / Switch / CheckButton tap 対応** (T006 申し送り)~~ → **完了 (T019)**。
 - **visual regression diff** (T007 申し送り): pixel diff / SSIM、baseline 管理。
-- **`real_widget_visible_after_present` integration test** (T006 Open Q-K)。
+- ~~**`real_widget_visible_after_present` integration test** (T006 Open Q-K)~~ → **完了 (T019)**。
 
 ### 長期 (capability roadmap)
 

@@ -4,9 +4,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import { buildFfmpegArgs, detectDisplayKind, Recorder } from "../src/recorder.ts";
 import { E2EError, RecorderError } from "../src/errors.ts";
+import { buildFfmpegArgs, detectDisplayKind, Recorder } from "../src/recorder.ts";
 
 describe("buildFfmpegArgs", () => {
   test("X11 default args (display from env)", () => {

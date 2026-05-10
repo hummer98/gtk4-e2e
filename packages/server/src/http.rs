@@ -38,6 +38,7 @@ use crate::input::{SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{EventEnvelope, Info, SwipeRequest, TapTarget, TypeRequest, WaitRequest};
 use crate::snapshot::ScreenshotError;
+use crate::state::AppDefinedState;
 use crate::tree::parse_selector;
 use crate::wait::{poll_until, WaitError, MAX_TIMEOUT_MS};
 
@@ -49,6 +50,9 @@ pub struct AppState {
     /// Broadcast bus for `WS /test/events`. Cloned per-connection at upgrade
     /// time via `subscribe()`.
     pub event_tx: tokio::sync::broadcast::Sender<EventEnvelope>,
+    /// App-defined state snapshot exposed via `GET /test/state` and read by
+    /// `WaitCondition::AppStateEq`.
+    pub state: AppDefinedState,
 }
 
 /// Build the router exposed by the in-process server.
@@ -62,12 +66,17 @@ pub fn router(state: AppState) -> Router {
         .route("/test/type", post(post_type))
         .route("/test/elements", get(get_elements))
         .route("/test/events", get(crate::ws::ws_events))
+        .route("/test/state", get(get_state))
         .fallback(unimpl)
         .with_state(state)
 }
 
 async fn get_info(State(state): State<AppState>) -> Json<Info> {
     Json((*state.info).clone())
+}
+
+async fn get_state(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(state.state.snapshot())
 }
 
 async fn unimpl(req: Request) -> Response {
@@ -208,16 +217,38 @@ async fn post_wait(State(state): State<AppState>, body: String) -> Response {
         return validation_error("invalid_timeout", json!({"reason": "excessive"}));
     }
 
-    // Pre-validate selectors syntactically.
-    let selector = match &req.condition {
-        crate::proto::WaitCondition::SelectorVisible { selector } => selector,
-        crate::proto::WaitCondition::StateEq { selector, .. } => selector,
-    };
-    if let Err(e) = parse_selector(selector) {
-        return validation_error("invalid_selector", json!({"reason": e.reason}));
+    // Pre-validate selector / path before crossing into the GLib main thread.
+    match &req.condition {
+        crate::proto::WaitCondition::SelectorVisible { selector }
+        | crate::proto::WaitCondition::StateEq { selector, .. } => {
+            if let Err(e) = parse_selector(selector) {
+                return validation_error("invalid_selector", json!({"reason": e.reason}));
+            }
+        }
+        crate::proto::WaitCondition::AppStateEq { path, .. } => {
+            // RFC 6901: an empty string ("") matches the document root, and a
+            // non-empty pointer must start with `/`. `serde_json::Value::pointer`
+            // silently returns `None` for malformed paths, which would otherwise
+            // make a client typo look like an indefinite tick failure. Surface
+            // the obvious case ("foo" without a leading `/`) as 422 invalid_path
+            // up-front so callers fail fast.
+            if !path.is_empty() && !path.starts_with('/') {
+                return validation_error(
+                    "invalid_path",
+                    json!({"reason": "missing_leading_slash"}),
+                );
+            }
+        }
     }
 
-    match poll_until(&state.cmd_tx, req.condition, req.timeout_ms).await {
+    match poll_until(
+        &state.cmd_tx,
+        state.state.clone(),
+        req.condition,
+        req.timeout_ms,
+    )
+    .await
+    {
         Ok(result) => Json(result).into_response(),
         Err(WaitError::Timeout) => error_response(
             StatusCode::REQUEST_TIMEOUT,

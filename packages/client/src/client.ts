@@ -10,7 +10,7 @@
 // → TS). The hand-written `TapTarget` type that used to live here was removed
 // in plan Review C3.
 
-import { discover, type DiscoverFilter, type InstanceFile } from "./discover.ts";
+import { type DiscoverFilter, discover, type InstanceFile } from "./discover.ts";
 import {
   DiscoveryError,
   E2EError,
@@ -18,7 +18,7 @@ import {
   NotImplementedError,
   WaitTimeoutError,
 } from "./errors.ts";
-import { openEventStream, type EventStream, type EventsOptions } from "./events.ts";
+import { type EventStream, type EventsOptions, openEventStream } from "./events.ts";
 import type {
   ElementsResponse,
   Info,
@@ -186,10 +186,7 @@ export class E2EClient {
    * matching widget — `roots: []` is a clean miss (HTTP 200, not 404).
    * `maxDepth` caps the depth of each returned subtree (`0` = root only).
    */
-  async elements(opts?: {
-    selector?: string;
-    maxDepth?: number;
-  }): Promise<ElementsResponse> {
+  async elements(opts?: { selector?: string; maxDepth?: number }): Promise<ElementsResponse> {
     const query: Record<string, string> = {};
     if (opts?.selector !== undefined) query.selector = opts.selector;
     if (opts?.maxDepth !== undefined) query.max_depth = String(opts.maxDepth);
@@ -198,6 +195,23 @@ export class E2EClient {
       path: "/test/elements",
       query,
       capability: "elements",
+      expect: "json",
+    });
+  }
+
+  /**
+   * Fetch the current app-defined state snapshot exposed at `GET /test/state`.
+   *
+   * Returns whatever JSON the demo / consumer last pushed via
+   * `Handle::set_state`. Defaults to `null` before the first push, so callers
+   * should narrow with the discriminator they expect rather than assume the
+   * shape.
+   */
+  async state(): Promise<unknown> {
+    return this._request<unknown>({
+      method: "GET",
+      path: "/test/state",
+      capability: "state",
       expect: "json",
     });
   }
