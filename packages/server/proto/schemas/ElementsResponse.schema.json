@@ -83,7 +83,7 @@
       "type": "object"
     }
   },
-  "description": "Body of `GET /test/elements`.\n\n`roots` contains: - selector unset: one entry per active window (typically 1). - selector set: one entry per matching widget, in DFS pre-order (outer matches before nested ones; nested matches inside an outer match are not duplicated as separate roots). Empty `roots` is **not** an error; HTTP returns 200 with `count: 0`.\n\n`count` is the total number of `ElementInfo` nodes across all roots (recursive sum of root + children).",
+  "description": "Body of `GET /test/elements`.\n\n`roots` contains: - selector unset: one entry per active window (typically 1). - selector set: one entry per matching widget, in DFS pre-order (outer matches before nested ones; nested matches inside an outer match are not duplicated as separate roots).\n\nEmpty `roots` is **not** an error; HTTP returns 200 with `count: 0`.\n\n`count` is the total number of `ElementInfo` nodes across all roots (recursive sum of root + children).",
   "properties": {
     "count": {
       "format": "uint32",
