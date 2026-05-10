@@ -86,6 +86,9 @@ Wayland sessions, macOS, and headless environments are out of MVP scope and
 exit with code 6 (`RecorderError`). Install ffmpeg via `apt install ffmpeg` /
 `brew install ffmpeg` / `dnf install ffmpeg`.
 
+For a full-run recording that drives all demo scenarios end-to-end, see
+the [Recorded demo run](#recorded-demo-run) section below.
+
 The `Recorder` class is also exported from the SDK:
 
 ```ts
@@ -95,6 +98,27 @@ await r.start();
 // ...
 await r.stop();
 ```
+
+## Recorded demo run
+
+The CI job `record-demo` (`.github/workflows/ci.yml`) drives all scenarios
+under Xvfb while ffmpeg captures the X display, and uploads the resulting
+mp4 as a workflow artifact named `demo-run-mp4` (retention 30 days).
+
+To download the latest recording:
+
+1. Open the most recent CI run on `main` from the Actions tab
+2. Scroll to **Artifacts** → `demo-run-mp4` → download → unzip → `demo-run.mp4`
+
+To regenerate locally (Linux X11 + `ffmpeg` on PATH required):
+
+```bash
+bash packages/demo/scripts/record-run.sh
+# → artifacts/demo-run.mp4
+```
+
+macOS and Wayland sessions are not supported by the recorder (T009 MVP)
+and will exit with code 6 (`RecorderError`).
 
 ## Claude Code integration
 

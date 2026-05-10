@@ -91,3 +91,41 @@ jobs:
             /tmp/gtk4-e2e-demo-*.log
           if-no-files-found: ignore
           retention-days: 7
+
+  record-demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK4 + xvfb + ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libglib2.0-dev \
+            pkg-config \
+            build-essential \
+            xvfb \
+            dbus-x11 \
+            ffmpeg
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - name: Smoke test gtk4-e2e CLI resolution
+        run: bunx gtk4-e2e --help >/dev/null
+      - name: Build demo binary (--features e2e)
+        run: cargo build -p gtk4-e2e-demo --features e2e
+      - name: Record scenarios run
+        run: |
+          xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            bash packages/demo/scripts/record-run.sh
+      - name: Upload demo recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: demo-run-mp4
+          path: artifacts/demo-run.mp4
+          if-no-files-found: error
+          retention-days: 30

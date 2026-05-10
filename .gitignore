@@ -29,6 +29,7 @@ package-lock.json
 test-results/
 recordings/
 screenshots/
+artifacts/
 
 # Env
 .env
