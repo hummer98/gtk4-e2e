@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
-use crate::input::{SwipeError, TapError, TypeError};
+use crate::input::{PinchError, SwipeError, TapError, TypeError};
 use crate::proto::{ElementsResponse, TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
@@ -86,6 +86,14 @@ pub enum MainCmd {
         selector: Option<String>,
         max_depth: Option<u32>,
         reply: oneshot::Sender<Result<ElementsResponse, ElementsError>>,
+    },
+    /// Synthesize a pinch over `duration_ms` (T015, plan §6.2). Replies on
+    /// the final emit_by_name frame, mirroring `Swipe`.
+    Pinch {
+        center: XY,
+        scale: f32,
+        duration_ms: u64,
+        reply: oneshot::Sender<Result<(), PinchError>>,
     },
 }
 
@@ -182,6 +190,24 @@ fn handle_cmd(cmd: MainCmd) {
             })
             .unwrap_or(Err(ElementsError::NoActiveWindow));
             let _ = reply.send(outcome);
+        }
+        MainCmd::Pinch {
+            center,
+            scale,
+            duration_ms,
+            reply,
+        } => {
+            // Plan T015 §6.2: same APP.with-direct-borrow trick as Swipe so
+            // the `Some/None` arms can each consume `reply` without
+            // borrow-checker contortions inside a `with_app` closure.
+            APP.with(|slot| match slot.borrow().as_ref() {
+                Some(app) => {
+                    crate::wait::dispatch_pinch(app, center, scale, duration_ms, reply);
+                }
+                None => {
+                    let _ = reply.send(Err(PinchError::NoActiveWindow));
+                }
+            });
         }
     }
 }

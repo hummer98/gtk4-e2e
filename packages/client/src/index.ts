@@ -23,6 +23,7 @@ export type {
   EventEnvelope,
   EventKind,
   Info,
+  PinchRequest,
   SwipeRequest,
   TapTarget,
   TypeRequest,

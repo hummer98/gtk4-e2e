@@ -14,7 +14,9 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
-use crate::input::{resolve_xy, tap_widget, type_text, SwipeError, TapError, TypeError};
+use crate::input::{
+    resolve_xy, tap_widget, type_text, PinchError, SwipeError, TapError, TypeError,
+};
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
 use crate::proto::{TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
 use crate::state::AppDefinedState;
@@ -206,6 +208,41 @@ pub(crate) fn dispatch_swipe(
 
     let anim = match crate::input::validate(&window, from, to, duration_ms) {
         Ok(anim) => anim,
+        Err(e) => {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    };
+
+    anim.run(move || {
+        let _ = reply.send(Ok(()));
+    });
+}
+
+/// GTK-bound entry point for `MainCmd::Pinch` (T015, plan §6.3). Mirror of
+/// `dispatch_swipe`: validates inputs synchronously, then either replies with
+/// the validation error or schedules the animation and replies with `Ok(())`
+/// from the timer's final frame.
+pub(crate) fn dispatch_pinch(
+    app: &crate::gtk::Application,
+    center: XY,
+    scale: f32,
+    duration_ms: u64,
+    reply: tokio::sync::oneshot::Sender<Result<(), PinchError>>,
+) {
+    let window = match app
+        .active_window()
+        .and_then(|w| w.downcast::<crate::gtk::ApplicationWindow>().ok())
+    {
+        Some(w) => w,
+        None => {
+            let _ = reply.send(Err(PinchError::NoActiveWindow));
+            return;
+        }
+    };
+
+    let anim = match crate::input::validate_pinch(&window, center, scale, duration_ms) {
+        Ok(a) => a,
         Err(e) => {
             let _ = reply.send(Err(e));
             return;

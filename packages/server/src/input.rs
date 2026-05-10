@@ -287,6 +287,11 @@ pub const MAX_SWIPE_DURATION_MS: u64 = 10_000;
 
 const SWIPE_TARGET_FPS: u64 = 60;
 
+/// Target frame rate for `PinchAnimation`. Mirrors `SWIPE_TARGET_FPS` so the
+/// `frames` / `frame_interval_ms` arithmetic stays parallel between the two
+/// animators.
+const PINCH_TARGET_FPS: u64 = 60;
+
 /// Plan output from [`validate`]. Holds adjustment refs and the precomputed
 /// animation parameters; calling [`SwipeAnimation::run`] schedules the GLib
 /// timer and consumes `self`. Pure (no widget mutation, no timer scheduled
@@ -448,6 +453,244 @@ pub fn find_scrolled_ancestor(widget: &gtk::Widget) -> Option<gtk::ScrolledWindo
         let parent = w.parent();
         if let Ok(sw) = w.downcast::<gtk::ScrolledWindow>() {
             return Some(sw);
+        }
+        cur = parent;
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Pinch (T015, plan §3 / §5)
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the pinch pipeline.
+///
+/// Mapped to HTTP status codes in `http.rs` (see plan T015 §6.1):
+///
+/// | error                    | http |
+/// |--------------------------|------|
+/// | `OutOfBounds`            | 422  |
+/// | `NoActiveWindow`         | 422  |
+/// | `NoPinchableAtPoint`     | 404  |
+/// | `ZeroDuration`           | 422  |
+/// | `DurationTooLong`        | 422  |
+/// | `InvalidScale { reason }`| 422  |
+#[derive(Debug, Clone, PartialEq)]
+pub enum PinchError {
+    OutOfBounds { x: i32, y: i32 },
+    NoActiveWindow,
+    NoPinchableAtPoint { x: i32, y: i32 },
+    ZeroDuration,
+    DurationTooLong { duration_ms: u64 },
+    InvalidScale { reason: &'static str },
+}
+
+impl std::fmt::Display for PinchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PinchError::OutOfBounds { x, y } => write!(f, "out_of_bounds: ({x}, {y})"),
+            PinchError::NoActiveWindow => write!(f, "no_active_window"),
+            PinchError::NoPinchableAtPoint { x, y } => {
+                write!(f, "no_pinchable_at_point: ({x}, {y})")
+            }
+            PinchError::ZeroDuration => write!(f, "invalid_duration: zero"),
+            PinchError::DurationTooLong { duration_ms } => {
+                write!(f, "invalid_duration: too_long ({duration_ms} ms)")
+            }
+            PinchError::InvalidScale { reason } => write!(f, "invalid_scale: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PinchError {}
+
+/// Upper bound on `duration_ms` (parallel to `MAX_SWIPE_DURATION_MS`).
+pub const MAX_PINCH_DURATION_MS: u64 = 10_000;
+
+/// Upper / lower bound on `scale` (symmetric: `1 / scale` is also bounded).
+/// 50× zoom is comfortably outside any realistic UI test; rejecting beyond
+/// this acts as a safety valve against integer overflow / draw-time pathology.
+pub const MAX_PINCH_SCALE: f32 = 50.0;
+
+/// Plan output from [`validate_pinch`]. Holds the resolved `GestureZoom` plus
+/// the precomputed animation parameters; calling [`PinchAnimation::run`]
+/// schedules the GLib timer and consumes `self`. Pure (no widget mutation, no
+/// timer scheduled yet) so HTTP handlers can inspect validation outcomes off
+/// the GLib thread before scheduling.
+pub struct PinchAnimation {
+    gesture: gtk::GestureZoom,
+    target_scale: f64,
+    frames: u64,
+    frame_interval_ms: u64,
+}
+
+impl PinchAnimation {
+    /// Schedule the animation via `glib::timeout_add_local`. `on_complete` is
+    /// called once after the final frame fires. Must be called on the GLib
+    /// main thread.
+    ///
+    /// Plan §3 Q1: emits `scale-changed` only (no `begin` / `end`). Each frame
+    /// linearly interpolates from `1.0` (gesture identity) to `target_scale`
+    /// in line with the `gdouble` cumulative-scale convention of GestureZoom.
+    pub fn run<F: FnOnce() + 'static>(self, on_complete: F) {
+        let PinchAnimation {
+            gesture,
+            target_scale,
+            frames,
+            frame_interval_ms,
+        } = self;
+        let mut current = 0u64;
+        let mut on_complete_slot = Some(on_complete);
+        glib::timeout_add_local(
+            std::time::Duration::from_millis(frame_interval_ms),
+            move || {
+                current += 1;
+                let t = (current as f64 / frames as f64).min(1.0);
+                let cur_scale: f64 = 1.0 + (target_scale - 1.0) * t;
+                // gtk4-rs ObjectExt::emit_by_name::<R>: signal returns void so
+                // the turbofish must be `<()>`. Args are `&[&dyn ToValue]`;
+                // borrowing a stack value here is fine — emit is synchronous.
+                gesture.emit_by_name::<()>("scale-changed", &[&cur_scale]);
+                if current >= frames {
+                    if let Some(cb) = on_complete_slot.take() {
+                        cb();
+                    }
+                    glib::ControlFlow::Break
+                } else {
+                    glib::ControlFlow::Continue
+                }
+            },
+        );
+    }
+}
+
+/// Validate a pinch request and prepare a [`PinchAnimation`].
+///
+/// Pure: does not schedule a GLib timer or mutate any widget. The returned
+/// animation must be `run` on the GLib main thread.
+///
+/// Order of checks (plan §5.2):
+/// 1. `scale` validation (NaN / Inf / non_positive / too_large / too_small).
+/// 2. `duration_ms` validation (zero / too_long).
+/// 3. window bounds (with `default_size()` fallback for pre-mapped quartz).
+/// 4. xy resolution (leaf widget at `center`).
+/// 5. ancestor walk for `GestureZoom`.
+pub fn validate_pinch(
+    window: &gtk::ApplicationWindow,
+    center: XY,
+    scale: f32,
+    duration_ms: u64,
+) -> Result<PinchAnimation, PinchError> {
+    if scale.is_nan() {
+        return Err(PinchError::InvalidScale { reason: "nan" });
+    }
+    if scale.is_infinite() {
+        return Err(PinchError::InvalidScale { reason: "infinite" });
+    }
+    if scale <= 0.0 {
+        return Err(PinchError::InvalidScale {
+            reason: "non_positive",
+        });
+    }
+    if scale > MAX_PINCH_SCALE {
+        return Err(PinchError::InvalidScale {
+            reason: "too_large",
+        });
+    }
+    // Reciprocal bound: `1 / scale > MAX` ⇒ scale below the symmetric floor.
+    if scale < 1.0 / MAX_PINCH_SCALE {
+        return Err(PinchError::InvalidScale {
+            reason: "too_small",
+        });
+    }
+
+    if duration_ms == 0 {
+        return Err(PinchError::ZeroDuration);
+    }
+    if duration_ms > MAX_PINCH_DURATION_MS {
+        return Err(PinchError::DurationTooLong { duration_ms });
+    }
+
+    let alloc = window.allocation();
+    let (mut w, mut h) = (alloc.width(), alloc.height());
+    if w <= 0 || h <= 0 {
+        let (dw, dh) = window.default_size();
+        if dw > 0 {
+            w = dw;
+        }
+        if dh > 0 {
+            h = dh;
+        }
+    }
+    if center.x < 0 || center.y < 0 || center.x >= w || center.y >= h {
+        return Err(PinchError::OutOfBounds {
+            x: center.x,
+            y: center.y,
+        });
+    }
+
+    let leaf = match resolve_xy(window, center.x, center.y) {
+        Ok(w) => w,
+        Err(TapError::OutOfBounds { x, y }) => return Err(PinchError::OutOfBounds { x, y }),
+        Err(_) => {
+            return Err(PinchError::NoPinchableAtPoint {
+                x: center.x,
+                y: center.y,
+            });
+        }
+    };
+
+    let gesture = find_zoom_gesture_ancestor(&leaf).ok_or(PinchError::NoPinchableAtPoint {
+        x: center.x,
+        y: center.y,
+    })?;
+
+    let frames = ((duration_ms * PINCH_TARGET_FPS) / 1000).max(1);
+    let frame_interval_ms = std::cmp::max(duration_ms / frames, 1);
+
+    Ok(PinchAnimation {
+        gesture,
+        target_scale: scale as f64,
+        frames,
+        frame_interval_ms,
+    })
+}
+
+/// Synthesize a pinch over `duration_ms`, returning once the animation is
+/// scheduled (not when it completes). Mirror of [`swipe`] for fire-and-forget
+/// callers; the HTTP path uses [`validate_pinch`] + [`PinchAnimation::run`]
+/// directly so it can reply on completion.
+pub fn pinch(
+    window: &gtk::ApplicationWindow,
+    center: XY,
+    scale: f32,
+    duration_ms: u64,
+) -> Result<(), PinchError> {
+    let anim = validate_pinch(window, center, scale, duration_ms)?;
+    anim.run(|| {});
+    Ok(())
+}
+
+/// Walk parents from `widget` looking for a widget with an attached
+/// `gtk::GestureZoom`. Returns the gesture so the caller can re-target it
+/// without a second walk.
+///
+/// Plan §3 Q2: `observe_controllers()` returns a `gio::ListModel` of
+/// `EventController`s. We iterate, downcasting each item to `GestureZoom`.
+/// Parent extraction must precede `downcast` (consumes `self`) — same
+/// pitfall as `find_scrolled_ancestor`.
+pub fn find_zoom_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::GestureZoom> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        let parent = w.parent();
+        let controllers = w.observe_controllers();
+        let n = controllers.n_items();
+        for i in 0..n {
+            if let Some(item) = controllers.item(i) {
+                if let Ok(gz) = item.downcast::<gtk::GestureZoom>() {
+                    return Some(gz);
+                }
+            }
         }
         cur = parent;
     }

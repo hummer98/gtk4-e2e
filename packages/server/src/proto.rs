@@ -26,6 +26,7 @@ pub struct Info {
 /// Step 9 appends `Type` (T013) for `POST /test/type` and `Swipe` (T014) for `POST /test/swipe`.
 /// Step 14 appends `Elements` (T018) for `GET /test/elements`.
 /// T019 appends `State` for `GET /test/state` (app-defined state snapshot).
+/// Step 9 (c) appends `Pinch` (T015) for `POST /test/pinch`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -38,6 +39,7 @@ pub enum Capability {
     Swipe,
     Elements,
     State,
+    Pinch,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -87,6 +89,21 @@ pub struct WaitRequest {
 pub struct SwipeRequest {
     pub from: XY,
     pub to: XY,
+    pub duration_ms: u64,
+}
+
+/// Body of `POST /test/pinch` (Step 9 (c), T015).
+///
+/// `center` is window-local pixel coordinates of the pinch focal point.
+/// `scale > 1.0` zooms in, `scale < 1.0` zooms out, `scale = 1.0` is a no-op.
+/// `duration_ms = 0` is rejected with HTTP 422 (`PinchError::ZeroDuration`);
+/// the upper bound is 10 000 ms (mirror of swipe).
+///
+/// `Eq` is intentionally omitted: `f32` is not `Eq` (NaN is not reflexive).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct PinchRequest {
+    pub center: XY,
+    pub scale: f32,
     pub duration_ms: u64,
 }
 

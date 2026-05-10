@@ -22,6 +22,7 @@ import { type EventStream, type EventsOptions, openEventStream } from "./events.
 import type {
   ElementsResponse,
   Info,
+  PinchRequest,
   TapTarget,
   TypeRequest,
   WaitCondition,
@@ -147,6 +148,28 @@ export class E2EClient {
       path: "/test/swipe",
       body: { from, to, duration_ms: durationMs },
       capability: "swipe",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Synthesize a pinch (zoom) gesture centred at `center` over `durationMs`,
+   * targeting any `gtk::GestureZoom` in the widget tree at that point.
+   *
+   * `scale > 1.0` zooms in, `scale < 1.0` zooms out, `scale = 1.0` is a no-op.
+   *
+   * Errors:
+   *   - 404 no_pinchable_at_point  — no `GestureZoom` ancestor at `center`
+   *   - 422 invalid_scale / invalid_duration / out_of_bounds / no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async pinch(center: { x: number; y: number }, scale: number, durationMs: number): Promise<void> {
+    const body: PinchRequest = { center, scale, duration_ms: durationMs };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/pinch",
+      body,
+      capability: "pinch",
       expect: "void",
     });
   }

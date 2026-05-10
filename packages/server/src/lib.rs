@@ -156,6 +156,7 @@ mod start_impl {
                 Capability::Swipe,
                 Capability::Elements,
                 Capability::State,
+                Capability::Pinch,
             ],
             token_required: token.as_ref().map(|_| true),
         });

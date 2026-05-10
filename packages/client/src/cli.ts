@@ -29,6 +29,7 @@ Subcommands:
   tap <selector|x,y>                POST /test/tap
   type <selector> <text>            POST /test/type
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
+  pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
   screenshot <out.png>              GET /test/screenshot → save to file
   elements [--selector <s>] [--max-depth <n>]
                                     GET /test/elements → JSON tree to stdout
@@ -251,6 +252,25 @@ async function runSwipe(parsed: ParsedArgs): Promise<void> {
   await client.swipe(from, to, durationMs);
 }
 
+function parsePinchScale(arg: string): number {
+  const n = Number.parseFloat(arg);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new ArgvError(`pinch: expected positive scale, got: ${arg}`);
+  }
+  return n;
+}
+
+async function runPinch(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 2) {
+    throw new ArgvError("pinch requires <x,y> <scale>");
+  }
+  const center = parseSwipeXY(parsed.positional[0]);
+  const scale = parsePinchScale(parsed.positional[1]);
+  const durationMs = parsed.flags.duration ?? 300;
+  const client = await buildClient(parsed);
+  await client.pinch(center, scale, durationMs);
+}
+
 async function runElements(parsed: ParsedArgs): Promise<void> {
   const client = await buildClient(parsed);
   const resp = await client.elements({
@@ -362,6 +382,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "swipe":
         await runSwipe(parsed);
+        return 0;
+      case "pinch":
+        await runPinch(parsed);
         return 0;
       case "screenshot":
         await runScreenshot(parsed);

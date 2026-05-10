@@ -2,15 +2,13 @@
 //!
 //! See `docs/seed.md` §6 Step 2 and `docs/adr/0001-architecture.md`.
 
-#[cfg(feature = "e2e")]
 use std::cell::RefCell;
-#[cfg(feature = "e2e")]
 use std::rc::Rc;
 
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, Entry, Label,
-    ListBox, Orientation, ScrolledWindow, Switch, ToggleButton,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry,
+    GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Switch, ToggleButton,
 };
 #[cfg(feature = "e2e")]
 use serde_json::{json, Value};
@@ -213,6 +211,53 @@ fn build_ui(
         });
     }
 
+    // Step 9 (c) (T015): DrawingArea + GestureZoom for `pinch` capability.
+    // `current_scale` is shared between the gesture handler and the draw_func.
+    // The clamp range below is intentionally wider than the server-side
+    // `MAX_PINCH_SCALE = 50` — it acts as a 2nd line of defence against
+    // accidental UI-side blow-up if a future caller bypasses validation.
+    let current_scale: Rc<RefCell<f64>> = Rc::new(RefCell::new(1.0));
+
+    let drawing_area = DrawingArea::builder()
+        .content_width(160)
+        .content_height(120)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+    drawing_area.set_widget_name("zoom1");
+    {
+        let current_scale = current_scale.clone();
+        drawing_area.set_draw_func(move |_da, cr, w, h| {
+            let s = *current_scale.borrow();
+            let cx = w as f64 / 2.0;
+            let cy = h as f64 / 2.0;
+            cr.translate(cx, cy);
+            cr.scale(s, s);
+            cr.set_source_rgb(0.2, 0.4, 0.9);
+            cr.arc(0.0, 0.0, 30.0, 0.0, std::f64::consts::TAU);
+            let _ = cr.fill();
+        });
+    }
+
+    let zoom_pos = Label::new(Some("1.00"));
+    zoom_pos.set_widget_name("zoom-pos");
+
+    let gesture = GestureZoom::new();
+    {
+        let current_scale = current_scale.clone();
+        let zoom_pos = zoom_pos.clone();
+        let drawing_area_w = drawing_area.clone();
+        gesture.connect_scale_changed(move |_g, scale| {
+            // 2-stage defence: server validates `MAX_PINCH_SCALE = 50`, the
+            // demo additionally clamps in case anything bypasses validation.
+            let clamped = scale.clamp(0.05, 100.0);
+            *current_scale.borrow_mut() = clamped;
+            zoom_pos.set_text(&format!("{:.2}", clamped));
+            drawing_area_w.queue_draw();
+        });
+    }
+    drawing_area.add_controller(gesture);
+
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(8)
@@ -231,12 +276,19 @@ fn build_ui(
     vbox.append(&toggle1);
     vbox.append(&scrolled);
     vbox.append(&scroll_pos);
+    vbox.append(&drawing_area);
+    vbox.append(&zoom_pos);
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("gtk4-e2e demo")
         .default_width(360)
-        .default_height(480)
+        // Step 9 (c) (T015): the pinch DrawingArea + zoom-pos Label add ~140 px
+        // below the ScrolledWindow. Bump default_height from 480 to 700 so
+        // ScrolledWindow keeps enough headroom for swipe scenarios that
+        // address y=400 (scroll widget would otherwise clamp to its
+        // min_content_height and y=400 would land in the pinch widgets).
+        .default_height(700)
         .child(&vbox)
         .build();
 

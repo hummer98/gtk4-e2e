@@ -1,13 +1,14 @@
 //! HTTP layer (axum).
 //!
 //! Routes (plan §Q11 / §Q4 Step 6 / Step 9 — T013 adds /test/type, T014 adds
-//! /test/swipe, T018 adds /test/elements):
+//! /test/swipe, T015 adds /test/pinch, T018 adds /test/elements):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
 //! | `/test/info`         | GET    | 200     | —       |
 //! | `/test/tap`          | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/swipe`        | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/pinch`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
@@ -34,9 +35,11 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::elements::ElementsError;
-use crate::input::{SwipeError, TapError, TypeError};
+use crate::input::{PinchError, SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError};
-use crate::proto::{EventEnvelope, Info, SwipeRequest, TapTarget, TypeRequest, WaitRequest};
+use crate::proto::{
+    EventEnvelope, Info, PinchRequest, SwipeRequest, TapTarget, TypeRequest, WaitRequest,
+};
 use crate::snapshot::ScreenshotError;
 use crate::state::AppDefinedState;
 use crate::tree::parse_selector;
@@ -61,6 +64,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/info", get(get_info))
         .route("/test/tap", post(post_tap))
         .route("/test/swipe", post(post_swipe))
+        .route("/test/pinch", post(post_pinch))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
@@ -201,6 +205,56 @@ fn swipe_error_response(e: SwipeError) -> Response {
             "invalid_duration",
             json!({ "reason": "too_long", "duration_ms": duration_ms }),
         ),
+    }
+}
+
+async fn post_pinch(State(state): State<AppState>, body: String) -> Response {
+    let req: PinchRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Pinch {
+            center: req.center,
+            scale: req.scale,
+            duration_ms: req.duration_ms,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match rx.await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => pinch_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+
+fn pinch_error_response(e: PinchError) -> Response {
+    match e {
+        PinchError::OutOfBounds { x, y } => {
+            validation_error("out_of_bounds", json!({ "x": x, "y": y }))
+        }
+        PinchError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        PinchError::NoPinchableAtPoint { x, y } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_pinchable_at_point", "x": x, "y": y }),
+        ),
+        PinchError::ZeroDuration => {
+            validation_error("invalid_duration", json!({ "reason": "zero" }))
+        }
+        PinchError::DurationTooLong { duration_ms } => validation_error(
+            "invalid_duration",
+            json!({ "reason": "too_long", "duration_ms": duration_ms }),
+        ),
+        PinchError::InvalidScale { reason } => {
+            validation_error("invalid_scale", json!({ "reason": reason }))
+        }
     }
 }
 

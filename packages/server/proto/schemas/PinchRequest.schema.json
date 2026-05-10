@@ -1,0 +1,46 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "XY": {
+      "description": "Window-local pixel coordinates (top-left origin).",
+      "properties": {
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Body of `POST /test/pinch` (Step 9 (c), T015).\n\n`center` is window-local pixel coordinates of the pinch focal point. `scale > 1.0` zooms in, `scale < 1.0` zooms out, `scale = 1.0` is a no-op. `duration_ms = 0` is rejected with HTTP 422 (`PinchError::ZeroDuration`); the upper bound is 10 000 ms (mirror of swipe).\n\n`Eq` is intentionally omitted: `f32` is not `Eq` (NaN is not reflexive).",
+  "properties": {
+    "center": {
+      "$ref": "#/definitions/XY"
+    },
+    "duration_ms": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "scale": {
+      "format": "float",
+      "type": "number"
+    }
+  },
+  "required": [
+    "center",
+    "duration_ms",
+    "scale"
+  ],
+  "title": "PinchRequest",
+  "type": "object"
+}
