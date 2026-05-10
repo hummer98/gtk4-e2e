@@ -12,6 +12,7 @@ fn accepts_hash_name() {
     let s = parse_selector("#btn1").expect("#btn1 should parse");
     match s {
         Selector::Name(n) => assert_eq!(n, "btn1"),
+        other => panic!("expected Selector::Name, got {other:?}"),
     }
 }
 
@@ -23,8 +24,19 @@ fn accepts_underscore_and_dash() {
 }
 
 #[test]
-fn rejects_dot_class() {
-    assert!(parse_selector(".foo").is_err());
+fn accepts_dot_class() {
+    let s = parse_selector(".foo").expect(".foo should parse");
+    match s {
+        Selector::Class(n) => assert_eq!(n, "foo"),
+        other => panic!("expected Selector::Class, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_invalid_dot_class() {
+    assert!(parse_selector(".").is_err());
+    assert!(parse_selector(".bad space").is_err());
+    assert!(parse_selector(".$bad").is_err());
 }
 
 #[test]
@@ -68,6 +80,7 @@ fn rejects_missing_hash() {
 #[derive(Debug)]
 struct MockNode {
     name: Option<&'static str>,
+    classes: Vec<&'static str>,
     children: Vec<MockNode>,
 }
 
@@ -75,11 +88,20 @@ impl MockNode {
     fn leaf(name: Option<&'static str>) -> Self {
         Self {
             name,
+            classes: vec![],
             children: vec![],
         }
     }
     fn branch(name: Option<&'static str>, children: Vec<MockNode>) -> Self {
-        Self { name, children }
+        Self {
+            name,
+            classes: vec![],
+            children,
+        }
+    }
+    fn with_classes(mut self, classes: Vec<&'static str>) -> Self {
+        self.classes = classes;
+        self
     }
 }
 
@@ -100,6 +122,9 @@ impl<'a> WidgetTree<'a> for &'a MockTree {
     }
     fn name(self, node: Self::Node) -> Option<String> {
         node.name.map(|s| s.to_string())
+    }
+    fn classes(self, node: Self::Node) -> Vec<String> {
+        node.classes.iter().map(|s| s.to_string()).collect()
     }
 }
 
@@ -146,4 +171,29 @@ fn mock_tree_skips_unnamed_nodes() {
     };
     let sel = Selector::Name("hit".to_string());
     assert!(find_first(&tree, &sel).is_some());
+}
+
+#[test]
+fn mock_tree_matches_class_selector() {
+    let tree = MockTree {
+        roots: vec![MockNode::branch(
+            Some("root"),
+            vec![
+                MockNode::leaf(Some("a")).with_classes(vec!["other"]),
+                MockNode::leaf(Some("b")).with_classes(vec!["primary", "x"]),
+            ],
+        )],
+    };
+    let sel = Selector::Class("primary".to_string());
+    let hit = find_first(&tree, &sel).expect("should find class match");
+    assert_eq!(hit.name, Some("b"));
+}
+
+#[test]
+fn mock_tree_class_miss_returns_none() {
+    let tree = MockTree {
+        roots: vec![MockNode::leaf(Some("solo"))],
+    };
+    let sel = Selector::Class("primary".to_string());
+    assert!(find_first(&tree, &sel).is_none());
 }

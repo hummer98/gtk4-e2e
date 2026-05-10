@@ -1,0 +1,137 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Bounds": {
+      "description": "Window-local widget bounds in CSS pixels (top-left origin).\n\nSource: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect` returns `f32`; we widen to `f64` here so JSON consumers don't need to reason about precision quirks of the float ↔ JSON round-trip.",
+      "properties": {
+        "height": {
+          "format": "double",
+          "type": "number"
+        },
+        "width": {
+          "format": "double",
+          "type": "number"
+        },
+        "x": {
+          "format": "double",
+          "type": "number"
+        },
+        "y": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "height",
+        "width",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "ElementInfo": {
+      "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets.",
+      "properties": {
+        "bounds": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Bounds"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "children": {
+          "items": {
+            "$ref": "#/definitions/ElementInfo"
+          },
+          "type": "array"
+        },
+        "css_classes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "visible": {
+          "type": "boolean"
+        },
+        "widget_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "sensitive",
+        "visible"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets.",
+  "properties": {
+    "bounds": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Bounds"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "children": {
+      "items": {
+        "$ref": "#/definitions/ElementInfo"
+      },
+      "type": "array"
+    },
+    "css_classes": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "type": "string"
+    },
+    "sensitive": {
+      "type": "boolean"
+    },
+    "visible": {
+      "type": "boolean"
+    },
+    "widget_name": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "kind",
+    "sensitive",
+    "visible"
+  ],
+  "title": "ElementInfo",
+  "type": "object"
+}

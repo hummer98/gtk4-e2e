@@ -24,6 +24,7 @@ pub struct Info {
 /// extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.
 /// Step 7 appends `Events` for the `WS /test/events` channel.
 /// Step 9 appends `Type` (T013) for `POST /test/type` and `Swipe` (T014) for `POST /test/swipe`.
+/// Step 14 appends `Elements` for `GET /test/elements`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -34,6 +35,7 @@ pub enum Capability {
     Events,
     Type,
     Swipe,
+    Elements,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -137,4 +139,63 @@ pub struct EventEnvelope {
 pub enum EventKind {
     StateChange,
     LogLine,
+}
+
+/// Window-local widget bounds in CSS pixels (top-left origin).
+///
+/// Source: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect`
+/// returns `f32`; we widen to `f64` here so JSON consumers don't need to
+/// reason about precision quirks of the float ↔ JSON round-trip.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq)]
+pub struct Bounds {
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+}
+
+/// One node of the widget tree returned by `GET /test/elements`.
+///
+/// `id` is a process-stable DFS pre-order index of the form `"e0"`,
+/// `"e1"`, ... assigned during a single walk. It is **not** stable across
+/// walks or app restarts — selectors (`#name` / `.class`) are the
+/// primary refer mechanism. `id` exists for response triage / log lines
+/// where a temporary handle is enough.
+///
+/// `widget_name` mirrors `widget.widget_name()`. Empty strings are
+/// normalised to `None` (matches `tree::GtkTree::name()` semantics —
+/// tree.rs:169-176).
+///
+/// `bounds` is `None` for unrealized / unmapped widgets.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct ElementInfo {
+    pub id: String,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub css_classes: Vec<String>,
+    pub visible: bool,
+    pub sensitive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bounds: Option<Bounds>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<ElementInfo>,
+}
+
+/// Body of `GET /test/elements`.
+///
+/// `roots` contains:
+///   - selector unset: one entry per active window (typically 1).
+///   - selector set: one entry per matching widget, in DFS pre-order
+///     (outer matches before nested ones; nested matches inside an outer
+///     match are not duplicated as separate roots).
+/// Empty `roots` is **not** an error; HTTP returns 200 with `count: 0`.
+///
+/// `count` is the total number of `ElementInfo` nodes across all roots
+/// (recursive sum of root + children).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct ElementsResponse {
+    pub roots: Vec<ElementInfo>,
+    pub count: u32,
 }

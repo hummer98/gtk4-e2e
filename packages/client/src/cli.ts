@@ -30,6 +30,8 @@ Subcommands:
   type <selector> <text>            POST /test/type
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   screenshot <out.png>              GET /test/screenshot → save to file
+  elements [--selector <s>] [--max-depth <n>]
+                                    GET /test/elements → JSON tree to stdout
   record start --output <path>      start ffmpeg recording (X11 only in MVP)
   record stop                       stop the running recorder
   record status                     print recorder status as JSON
@@ -43,6 +45,8 @@ Flags (apply to all subcommands):
   --display <:N>  X11 display for record start (default: $DISPLAY)
   --fps <n>       recorder framerate (default: 30)
   --duration <ms> swipe gesture duration in ms (default: 300)
+  --selector <s>  selector for elements (e.g. #input1 or .primary)
+  --max-depth <n> cap subtree depth for elements (0 = root only)
   --verbose       inherit recorder stderr (record start)
   --help, -h      show this message
 `;
@@ -59,6 +63,8 @@ interface ParsedArgs {
     display?: string;
     fps?: number;
     duration?: number;
+    selector?: string;
+    maxDepth?: number;
     verbose: boolean;
     help: boolean;
   };
@@ -137,6 +143,21 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!Number.isFinite(n) || n <= 0)
         throw new ArgvError(`--duration: not a positive integer: ${v}`);
       result.flags.duration = n;
+      continue;
+    }
+    if (a === "--selector") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--selector requires a value");
+      result.flags.selector = v;
+      continue;
+    }
+    if (a === "--max-depth") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--max-depth requires a value");
+      const n = Number.parseInt(v, 10);
+      if (!Number.isFinite(n) || n < 0)
+        throw new ArgvError(`--max-depth: not a non-negative integer: ${v}`);
+      result.flags.maxDepth = n;
       continue;
     }
     if (a.startsWith("--")) {
@@ -228,6 +249,15 @@ async function runSwipe(parsed: ParsedArgs): Promise<void> {
   const durationMs = parsed.flags.duration ?? 300;
   const client = await buildClient(parsed);
   await client.swipe(from, to, durationMs);
+}
+
+async function runElements(parsed: ParsedArgs): Promise<void> {
+  const client = await buildClient(parsed);
+  const resp = await client.elements({
+    selector: parsed.flags.selector,
+    maxDepth: parsed.flags.maxDepth,
+  });
+  process.stdout.write(`${JSON.stringify(resp, null, 2)}\n`);
 }
 
 async function runScreenshot(parsed: ParsedArgs): Promise<void> {
@@ -335,6 +365,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "screenshot":
         await runScreenshot(parsed);
+        return 0;
+      case "elements":
+        await runElements(parsed);
         return 0;
       case "record":
         return await runRecord(parsed);

@@ -184,7 +184,7 @@ fn invalid_selector_is_permanent_failure() {
     let roots: Vec<MockNode> = vec![];
     let tree = MockTreeRef(&roots);
     let cond = WaitCondition::SelectorVisible {
-        selector: ".bad".into(),
+        selector: "@bad".into(),
     };
     match eval_condition(tree, &cond) {
         WaitTickResult::PermanentFailure(WaitEvalError::InvalidSelector(_)) => {}

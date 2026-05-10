@@ -34,6 +34,7 @@ interface RouteHandlers {
   type?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
+  elements?: (url: URL) => Response | Promise<Response>;
 }
 
 function startMock(handlers: RouteHandlers): MockServer {
@@ -61,6 +62,8 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
+      if (url.pathname === "/test/elements" && handlers.elements)
+        return handlers.elements(url);
       return new Response("not found", { status: 404 });
     },
   });
@@ -413,5 +416,99 @@ describe("E2EClient.screenshot", () => {
     expect(thrown).toBeInstanceOf(NotImplementedError);
     expect((thrown as NotImplementedError).capability).toBe("screenshot");
     expect((thrown as NotImplementedError).status).toBe(501);
+  });
+});
+
+describe("E2EClient.elements", () => {
+  let mock: MockServer;
+  const empty = { roots: [], count: 0 };
+  let lastUrl: URL | null = null;
+
+  afterEach(async () => {
+    await mock.stop();
+    lastUrl = null;
+  });
+
+  test("issues GET /test/elements with no query when called without args", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(empty);
+      },
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    const got = await client.elements();
+    expect(got).toEqual(empty);
+    expect(lastUrl?.pathname).toBe("/test/elements");
+    expect(lastUrl?.search).toBe("");
+  });
+
+  test("encodes selector and max_depth as query params", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(empty);
+      },
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.elements({ selector: "#input1", maxDepth: 2 });
+
+    expect(lastUrl?.searchParams.get("selector")).toBe("#input1");
+    expect(lastUrl?.searchParams.get("max_depth")).toBe("2");
+  });
+
+  test("encodes class selector with leading dot", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(empty);
+      },
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.elements({ selector: ".primary" });
+
+    expect(lastUrl?.searchParams.get("selector")).toBe(".primary");
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      elements: () =>
+        new Response(
+          JSON.stringify({ error: "not_implemented", capability: "elements" }),
+          {
+            status: 501,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await expect(client.elements()).rejects.toBeInstanceOf(NotImplementedError);
+  });
+
+  test("throws HttpError on 422", async () => {
+    mock = startMock({
+      elements: () =>
+        new Response(
+          JSON.stringify({ error: "invalid_selector", reason: "bad" }),
+          {
+            status: 422,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.elements({ selector: "@bad" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(422);
   });
 });

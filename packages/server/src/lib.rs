@@ -7,6 +7,8 @@
 //! See `docs/seed.md` §6 Step 1 and `docs/adr/0001-architecture.md`.
 
 #[cfg(feature = "e2e")]
+pub mod elements;
+#[cfg(feature = "e2e")]
 pub mod http;
 #[cfg(feature = "e2e")]
 pub mod input;
@@ -137,6 +139,7 @@ mod start_impl {
                 Capability::Events,
                 Capability::Type,
                 Capability::Swipe,
+                Capability::Elements,
             ],
             token_required: token.as_ref().map(|_| true),
         });

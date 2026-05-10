@@ -1,6 +1,7 @@
 //! HTTP layer (axum).
 //!
-//! Routes (plan §Q11 / §Q4 Step 6 / Step 9 — T013 adds /test/type, T014 adds /test/swipe):
+//! Routes (plan §Q11 / §Q4 Step 6 / Step 9 — T013 adds /test/type, T014 adds
+//! /test/swipe, T018 adds /test/elements):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
@@ -10,11 +11,14 @@
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/elements`     | GET    | 200     | 422 / 500 |
 //! | (any unknown)        | *      | —       | 501 (axum fallback) |
 //!
 //! Plan Review M2: 501 = capability missing. 404 = domain not-found (only
 //! emitted by `tap` when a selector matches no widget, and by `swipe` when
 //! the `from` point is not contained in any `ScrolledWindow`).
+//! `/test/elements` returns 200 with `roots: []` on selector miss (Playwright
+//! `.all()` parity), so it never raises 404.
 
 use std::sync::Arc;
 
@@ -29,6 +33,7 @@ use axum::{
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
+use crate::elements::ElementsError;
 use crate::input::{SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{EventEnvelope, Info, SwipeRequest, TapTarget, TypeRequest, WaitRequest};
@@ -55,6 +60,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
+        .route("/test/elements", get(get_elements))
         .route("/test/events", get(crate::ws::ws_events))
         .fallback(unimpl)
         .with_state(state)
@@ -310,6 +316,123 @@ fn type_error_response(e: TypeError) -> Response {
             validation_error("widget_disabled", json!({ "selector": selector }))
         }
         TypeError::NoActiveWindow => validation_error("no_active_window", json!({})),
+    }
+}
+
+async fn get_elements(
+    State(state): State<AppState>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> Response {
+    let q = match parse_elements_query(raw.as_deref().unwrap_or("")) {
+        Ok(q) => q,
+        Err(resp) => return resp,
+    };
+
+    if let Some(selector) = q.selector.as_deref() {
+        if let Err(e) = parse_selector(selector) {
+            return validation_error("invalid_selector", json!({"reason": e.reason}));
+        }
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Elements {
+            selector: q.selector,
+            max_depth: q.max_depth,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match rx.await {
+        Ok(Ok(resp)) => Json(resp).into_response(),
+        Ok(Err(e)) => elements_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+
+struct ElementsQuery {
+    selector: Option<String>,
+    max_depth: Option<u32>,
+}
+
+fn parse_elements_query(raw: &str) -> Result<ElementsQuery, Response> {
+    let mut selector: Option<String> = None;
+    let mut max_depth: Option<u32> = None;
+    if !raw.is_empty() {
+        for pair in raw.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let (k, v) = match pair.split_once('=') {
+                Some((k, v)) => (k, v),
+                None => (pair, ""),
+            };
+            let value = match decode_query_component(v) {
+                Some(s) => s,
+                None => {
+                    return Err(validation_error(
+                        "invalid_query",
+                        json!({ "reason": "malformed_percent_encoding", "key": k }),
+                    ));
+                }
+            };
+            match k {
+                "selector" => selector = Some(value),
+                "max_depth" => match value.parse::<u32>() {
+                    Ok(n) => max_depth = Some(n),
+                    Err(_) => {
+                        return Err(validation_error(
+                            "invalid_max_depth",
+                            json!({ "reason": "non_integer" }),
+                        ));
+                    }
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(ElementsQuery {
+        selector,
+        max_depth,
+    })
+}
+
+fn decode_query_component(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16)?;
+                let lo = (bytes[i + 2] as char).to_digit(16)?;
+                out.push(((hi << 4) | lo) as u8);
+                i += 3;
+            }
+            b'%' => return None,
+            c => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+fn elements_error_response(e: ElementsError) -> Response {
+    match e {
+        ElementsError::InvalidSelector { reason } => {
+            validation_error("invalid_selector", json!({ "reason": reason }))
+        }
+        ElementsError::NoActiveWindow => validation_error("no_active_window", json!({})),
     }
 }
 

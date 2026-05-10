@@ -1,0 +1,31 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Window-local widget bounds in CSS pixels (top-left origin).\n\nSource: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect` returns `f32`; we widen to `f64` here so JSON consumers don't need to reason about precision quirks of the float ↔ JSON round-trip.",
+  "properties": {
+    "height": {
+      "format": "double",
+      "type": "number"
+    },
+    "width": {
+      "format": "double",
+      "type": "number"
+    },
+    "x": {
+      "format": "double",
+      "type": "number"
+    },
+    "y": {
+      "format": "double",
+      "type": "number"
+    }
+  },
+  "required": [
+    "height",
+    "width",
+    "x",
+    "y"
+  ],
+  "title": "Bounds",
+  "type": "object"
+}

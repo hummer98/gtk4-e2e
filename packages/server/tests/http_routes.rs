@@ -38,6 +38,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Events,
             Capability::Type,
             Capability::Swipe,
+            Capability::Elements,
         ],
         token_required: None,
     });
@@ -88,7 +89,7 @@ async fn tap_invalid_selector_422() {
                 .method("POST")
                 .uri("/test/tap")
                 .header("content-type", "application/json")
-                .body(Body::from("{\"selector\":\".bad\"}"))
+                .body(Body::from("{\"selector\":\"@bad\"}"))
                 .unwrap(),
         )
         .await
@@ -175,7 +176,7 @@ async fn wait_invalid_selector_422() {
     let (state, _tx) = make_state();
     let app = router(state);
     let body = json!({
-        "condition": {"kind": "selector_visible", "selector": ".bad"},
+        "condition": {"kind": "selector_visible", "selector": "@bad"},
         "timeout_ms": 100,
     });
     let resp = app
@@ -557,7 +558,7 @@ async fn type_invalid_selector_422() {
                 .method("POST")
                 .uri("/test/type")
                 .header("content-type", "application/json")
-                .body(Body::from("{\"selector\":\".bad\",\"text\":\"x\"}"))
+                .body(Body::from("{\"selector\":\"@bad\",\"text\":\"x\"}"))
                 .unwrap(),
         )
         .await
@@ -613,8 +614,17 @@ async fn type_capability_in_info() {
     let cap_strs: Vec<&str> = caps.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         cap_strs,
-        vec!["info", "tap", "wait", "screenshot", "events", "type", "swipe"],
-        "capabilities order must include type and swipe at the tail"
+        vec![
+            "info",
+            "tap",
+            "wait",
+            "screenshot",
+            "events",
+            "type",
+            "swipe",
+            "elements"
+        ],
+        "capabilities order must include type/swipe/elements at the tail"
     );
 }
 
@@ -830,6 +840,201 @@ async fn swipe_no_scrollable_404() {
         v.get("error").and_then(Value::as_str),
         Some("no_scrollable_at_point")
     );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- Step 14 (T018): elements capability -----
+
+#[tokio::test]
+async fn elements_invalid_selector_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/elements?selector=%40bad")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_selector")
+    );
+}
+
+#[tokio::test]
+async fn elements_invalid_max_depth_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/elements?max_depth=abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_max_depth")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn elements_endpoint_returns_tree() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-elements-tree")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let entry = gtk::Entry::builder().build();
+    entry.set_widget_name("input1");
+    let label = gtk::Label::new(Some("hi"));
+    label.set_widget_name("label1");
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&entry);
+    vbox.append(&label);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&vbox)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let roots = v
+        .get("roots")
+        .and_then(Value::as_array)
+        .expect("roots array");
+    assert_eq!(roots.len(), 1, "single window root expected");
+    let count = v.get("count").and_then(Value::as_u64).unwrap_or(0);
+    assert!(count > 1, "tree should have multiple nodes, got {count}");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn elements_no_active_window_422() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-elements-noactive")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/elements")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(32);
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("no_active_window")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn elements_selector_match_returns_subtree() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-elements-class")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let entry = gtk::Entry::builder().build();
+    entry.set_widget_name("entry1");
+    entry.add_css_class("primary");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&entry)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/elements?selector=.primary")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let roots = v
+        .get("roots")
+        .and_then(Value::as_array)
+        .expect("roots array");
+    assert_eq!(roots.len(), 1, "expected exactly 1 .primary match");
+    let widget_name = roots[0]
+        .get("widget_name")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    assert_eq!(widget_name, "entry1");
 
     window.close();
     common::pump_glib(32);

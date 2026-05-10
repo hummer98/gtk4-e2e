@@ -63,6 +63,7 @@ fn build_ui(
     // as soon as the button is tapped.
     let entry = Entry::builder().text("hello").build();
     entry.set_widget_name("entry1");
+    entry.add_css_class("primary");
     // Step 9: secondary Entry for `type` capability scenarios (initial empty).
     // No signal handlers — type.spec.ts asserts directly via `state_eq #input1.text`.
     let input1 = Entry::builder().build();

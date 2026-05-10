@@ -19,7 +19,14 @@ import {
   WaitTimeoutError,
 } from "./errors.ts";
 import { openEventStream, type EventStream, type EventsOptions } from "./events.ts";
-import type { Info, TapTarget, TypeRequest, WaitCondition, WaitResult } from "./types.gen.ts";
+import type {
+  ElementsResponse,
+  Info,
+  TapTarget,
+  TypeRequest,
+  WaitCondition,
+  WaitResult,
+} from "./types.gen.ts";
 
 interface ClientOptions {
   baseUrl: string;
@@ -32,6 +39,8 @@ interface RequestOptions {
   method: "GET" | "POST";
   path: string;
   body?: unknown;
+  /** Optional query string params; appended as `?k=v&k=v`. */
+  query?: Record<string, string>;
   capability: string;
   expect: ResponseKind;
   /** Server-side deadline for long-poll endpoints; surfaced via WaitTimeoutError. */
@@ -169,6 +178,30 @@ export class E2EClient {
     return openEventStream(this, opts);
   }
 
+  /**
+   * Walk the widget tree (Step 14, T018).
+   *
+   * Without options, returns one root per active window with the full
+   * subtree. With `selector` (`#name` or `.class`), returns one root per
+   * matching widget — `roots: []` is a clean miss (HTTP 200, not 404).
+   * `maxDepth` caps the depth of each returned subtree (`0` = root only).
+   */
+  async elements(opts?: {
+    selector?: string;
+    maxDepth?: number;
+  }): Promise<ElementsResponse> {
+    const query: Record<string, string> = {};
+    if (opts?.selector !== undefined) query.selector = opts.selector;
+    if (opts?.maxDepth !== undefined) query.max_depth = String(opts.maxDepth);
+    return this._request<ElementsResponse>({
+      method: "GET",
+      path: "/test/elements",
+      query,
+      capability: "elements",
+      expect: "json",
+    });
+  }
+
   async screenshot(): Promise<Uint8Array>;
   async screenshot(path: string): Promise<string>;
   async screenshot(path?: string): Promise<Uint8Array | string> {
@@ -196,9 +229,20 @@ export class E2EClient {
       init.body = JSON.stringify(opts.body);
     }
 
+    let url = `${this.baseUrl}${opts.path}`;
+    if (opts.query) {
+      const entries = Object.entries(opts.query);
+      if (entries.length > 0) {
+        const qs = new URLSearchParams();
+        for (const [k, v] of entries) qs.set(k, v);
+        const sep = opts.path.includes("?") ? "&" : "?";
+        url = `${this.baseUrl}${opts.path}${sep}${qs.toString()}`;
+      }
+    }
+
     let res: Response;
     try {
-      res = await fetch(`${this.baseUrl}${opts.path}`, init);
+      res = await fetch(url, init);
     } catch (err) {
       throw new E2EError(`network error contacting ${this.baseUrl}${opts.path}`, { cause: err });
     }

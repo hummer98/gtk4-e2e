@@ -21,6 +21,9 @@ const ALL_SCHEMA_FILES: &[&str] = &[
     "WaitResult.schema.json",
     "EventEnvelope.schema.json",
     "EventKind.schema.json",
+    "Bounds.schema.json",
+    "ElementInfo.schema.json",
+    "ElementsResponse.schema.json",
 ];
 
 #[test]
@@ -96,7 +99,7 @@ fn capability_includes_tap_wait() {
 fn capability_enum_order_is_anchored() {
     // Plan §Q5 / Step 9: Capability ordering must match the surfaced order.
     // Step 7 anchored Events at the tail; Step 9 appends Type (T013) and
-    // Swipe (T014) after Events.
+    // Swipe (T014) after Events. Step 14 appends Elements (T018) at the tail.
     let tmp = tempfile::tempdir().unwrap();
     write_schemas(tmp.path()).unwrap();
 
@@ -109,8 +112,17 @@ fn capability_enum_order_is_anchored() {
     let strs: Vec<&str> = arr.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         strs,
-        vec!["info", "tap", "wait", "screenshot", "events", "type", "swipe"],
-        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe]"
+        vec![
+            "info",
+            "tap",
+            "wait",
+            "screenshot",
+            "events",
+            "type",
+            "swipe",
+            "elements"
+        ],
+        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements]"
     );
 }
 
@@ -132,6 +144,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Events,
             gtk4_e2e_server::Capability::Type,
             gtk4_e2e_server::Capability::Swipe,
+            gtk4_e2e_server::Capability::Elements,
         ],
         token_required: None,
     };
@@ -145,6 +158,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Events,
             gtk4_e2e_server::Capability::Type,
             gtk4_e2e_server::Capability::Swipe,
+            gtk4_e2e_server::Capability::Elements,
         ]
     );
 }

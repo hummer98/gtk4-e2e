@@ -34,6 +34,7 @@ interface RouteHandlers {
   type?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
+  elements?: (url: URL) => Response | Promise<Response>;
 }
 
 function startMock(handlers: RouteHandlers): MockServer {
@@ -61,6 +62,8 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
+      if (url.pathname === "/test/elements" && handlers.elements)
+        return handlers.elements(url);
       return new Response("not found", { status: 404 });
     },
   });
@@ -331,6 +334,110 @@ describe("cli screenshot", () => {
     expect(result.exitCode).toBe(0);
     const bytes = await Bun.file(out).bytes();
     expect(bytes[0]).toBe(0x89);
+  });
+});
+
+describe("cli elements", () => {
+  let mock: MockServer;
+  let lastUrl: URL | null = null;
+
+  afterEach(async () => {
+    await mock.stop();
+    lastUrl = null;
+  });
+
+  const sampleResp = {
+    roots: [
+      {
+        id: "e0",
+        kind: "GtkApplicationWindow",
+        widget_name: "win1",
+        css_classes: [],
+        visible: true,
+        sensitive: true,
+        children: [],
+      },
+    ],
+    count: 1,
+  };
+
+  test("prints pretty JSON tree to stdout (no flags)", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(sampleResp);
+      },
+    });
+
+    const result = await runCli(["elements", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as typeof sampleResp;
+    expect(parsed).toEqual(sampleResp);
+    expect(lastUrl?.search).toBe("");
+  });
+
+  test("forwards --selector and --max-depth as query params", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(sampleResp);
+      },
+    });
+
+    const result = await runCli([
+      "elements",
+      "--selector",
+      "#input1",
+      "--max-depth",
+      "2",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(lastUrl?.searchParams.get("selector")).toBe("#input1");
+    expect(lastUrl?.searchParams.get("max_depth")).toBe("2");
+  });
+
+  test("--max-depth with negative value exits 2", async () => {
+    mock = startMock({ elements: () => Response.json(sampleResp) });
+
+    const result = await runCli([
+      "elements",
+      "--max-depth",
+      "-1",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("--max-depth with non-integer value exits 2", async () => {
+    mock = startMock({ elements: () => Response.json(sampleResp) });
+
+    const result = await runCli([
+      "elements",
+      "--max-depth",
+      "abc",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("501 from server exits 3 (NotImplementedError)", async () => {
+    mock = startMock({
+      elements: () =>
+        new Response(
+          JSON.stringify({ error: "not_implemented", capability: "elements" }),
+          {
+            status: 501,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    });
+
+    const result = await runCli(["elements", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(3);
   });
 });
 

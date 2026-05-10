@@ -10,12 +10,13 @@ use std::fmt;
 
 /// Parsed selector value.
 ///
-/// Only `Name(_)` is wired up for MVP. Future variants (e.g. `Class(_)`,
-/// hierarchical chains) can be added without breaking call sites that pattern
-/// match exhaustively — they will simply gain new arms.
+/// Step 14 introduces `Class(_)` (`.css_class`) alongside `Name(_)` (`#name`).
+/// Hierarchical / pseudo-class chains remain out of scope and would slot in
+/// here as new variants when needed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Selector {
     Name(String),
+    Class(String),
 }
 
 /// Selector parse error returned to HTTP handlers as `422 invalid_selector`.
@@ -37,17 +38,40 @@ const MAX_NAME_LEN: usize = 64;
 
 /// Parse a selector string.
 ///
-/// Grammar (plan §Q1):
+/// Grammar (plan §Q1, extended in Step 14):
 ///
 /// ```text
-/// selector   := "#" identifier
+/// selector   := ("#" | ".") identifier
 /// identifier := [A-Za-z_][A-Za-z0-9_-]{0,63}
 /// ```
+///
+/// `#name` is `widget_name` exact match; `.class` is `widget.css_classes()`
+/// membership match.
 pub fn parse_selector(input: &str) -> Result<Selector, InvalidSelector> {
-    let rest = input.strip_prefix('#').ok_or(InvalidSelector {
-        input: input.to_string(),
-        reason: "selector must start with `#`",
-    })?;
+    let (kind, rest) = if let Some(rest) = input.strip_prefix('#') {
+        (SelectorKind::Name, rest)
+    } else if let Some(rest) = input.strip_prefix('.') {
+        (SelectorKind::Class, rest)
+    } else {
+        return Err(InvalidSelector {
+            input: input.to_string(),
+            reason: "selector must start with `#` or `.`",
+        });
+    };
+    validate_identifier(input, rest)?;
+    Ok(match kind {
+        SelectorKind::Name => Selector::Name(rest.to_string()),
+        SelectorKind::Class => Selector::Class(rest.to_string()),
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SelectorKind {
+    Name,
+    Class,
+}
+
+fn validate_identifier(input: &str, rest: &str) -> Result<(), InvalidSelector> {
     if rest.is_empty() {
         return Err(InvalidSelector {
             input: input.to_string(),
@@ -76,7 +100,7 @@ pub fn parse_selector(input: &str) -> Result<Selector, InvalidSelector> {
             });
         }
     }
-    Ok(Selector::Name(rest.to_string()))
+    Ok(())
 }
 
 /// Abstraction over a widget tree, decoupling the walker from gtk4-rs so it
@@ -92,30 +116,43 @@ pub trait WidgetTree<'a>: Copy {
     fn roots(self) -> Self::Roots;
     fn children(self, node: Self::Node) -> Self::Children;
     fn name(self, node: Self::Node) -> Option<String>;
+
+    /// CSS classes attached to `node`. Default returns an empty vector so
+    /// pre-existing fixtures keep compiling; impls that want to support
+    /// `.class` selectors override it.
+    fn classes(self, _node: Self::Node) -> Vec<String> {
+        Vec::new()
+    }
 }
 
-/// Find the first node whose `widget_name` matches `selector`, in DFS order
-/// (root → first child → its first child → ... pre-order).
+/// Free helper — returns true iff `node` matches `sel`.
+///
+/// Lives at module scope (not on the trait) so call sites pattern-match
+/// `Selector` once and the trait stays minimal.
+pub fn selector_matches<'a, T: WidgetTree<'a>>(tree: T, node: T::Node, sel: &Selector) -> bool {
+    match sel {
+        Selector::Name(target) => tree.name(node).as_deref() == Some(target.as_str()),
+        Selector::Class(target) => tree.classes(node).iter().any(|c| c == target),
+    }
+}
+
+/// Find the first node whose attributes match `selector`, in DFS pre-order
+/// (root → first child → its first child → ...).
 pub fn find_first<'a, T: WidgetTree<'a>>(tree: T, selector: &Selector) -> Option<T::Node> {
-    let target = match selector {
-        Selector::Name(n) => n.as_str(),
-    };
     for r in tree.roots() {
-        if let Some(hit) = walk(tree, r, target) {
+        if let Some(hit) = walk(tree, r, selector) {
             return Some(hit);
         }
     }
     None
 }
 
-fn walk<'a, T: WidgetTree<'a>>(tree: T, node: T::Node, target: &str) -> Option<T::Node> {
-    if let Some(name) = tree.name(node.clone()) {
-        if name == target {
-            return Some(node);
-        }
+fn walk<'a, T: WidgetTree<'a>>(tree: T, node: T::Node, sel: &Selector) -> Option<T::Node> {
+    if selector_matches(tree, node.clone(), sel) {
+        return Some(node);
     }
     for c in tree.children(node.clone()) {
-        if let Some(hit) = walk(tree, c, target) {
+        if let Some(hit) = walk(tree, c, sel) {
             return Some(hit);
         }
     }
@@ -174,5 +211,13 @@ impl<'a> WidgetTree<'a> for GtkTree<'a> {
         } else {
             Some(n.to_string())
         }
+    }
+
+    fn classes(self, node: Self::Node) -> Vec<String> {
+        use crate::gtk::prelude::*;
+        node.css_classes()
+            .into_iter()
+            .map(|s| s.to_string())
+            .collect()
     }
 }

@@ -21,8 +21,9 @@ use crate::gtk::glib;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
+use crate::elements::ElementsError;
 use crate::input::{SwipeError, TapError, TypeError};
-use crate::proto::{TapTarget, TypeRequest, WaitCondition, XY};
+use crate::proto::{ElementsResponse, TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
@@ -79,6 +80,12 @@ pub enum MainCmd {
         to: XY,
         duration_ms: u64,
         reply: oneshot::Sender<Result<(), SwipeError>>,
+    },
+    /// Walk the widget tree (Step 14, T018).
+    Elements {
+        selector: Option<String>,
+        max_depth: Option<u32>,
+        reply: oneshot::Sender<Result<ElementsResponse, ElementsError>>,
     },
 }
 
@@ -164,6 +171,17 @@ fn handle_cmd(cmd: MainCmd) {
                     let _ = reply.send(Err(SwipeError::NoActiveWindow));
                 }
             });
+        }
+        MainCmd::Elements {
+            selector,
+            max_depth,
+            reply,
+        } => {
+            let outcome = with_app(|app| {
+                crate::elements::walk_elements(app, selector.as_deref(), max_depth)
+            })
+            .unwrap_or(Err(ElementsError::NoActiveWindow));
+            let _ = reply.send(outcome);
         }
     }
 }
