@@ -269,4 +269,102 @@ describe("cli error handling", () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("gtk4-e2e");
   });
+
+  test("USAGE mentions the record subcommand", async () => {
+    const result = await runCli(["--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("record");
+  });
+});
+
+describe("cli record", () => {
+  let scratch: string;
+
+  beforeEach(() => {
+    scratch = mkdtempSync(join(tmpdir(), "gtk4-e2e-cli-rec-"));
+  });
+
+  afterEach(() => {
+    rmSync(scratch, { recursive: true, force: true });
+  });
+
+  // The CLI uses GTK4_E2E_RECORDER_BIN as a back-door so tests can stand a
+  // real `sleep` in for ffmpeg without touching X11. XDG_RUNTIME_DIR pins
+  // the PID file location to a tmpdir so concurrent test runs don't trip
+  // over each other's recorder.json.
+  async function runRecord(
+    args: string[],
+    extraEnv: Record<string, string> = {},
+  ): Promise<SpawnResult> {
+    const env: Record<string, string> = {
+      ...(process.env as Record<string, string>),
+      XDG_RUNTIME_DIR: scratch,
+      DISPLAY: ":0",
+      GTK4_E2E_RECORDER_BIN: "sleep",
+      GTK4_E2E_RECORDER_FAKE_ARGS: "1",
+      ...extraEnv,
+    };
+    const proc = Bun.spawn(["bun", "run", CLI_PATH, ...args], {
+      cwd: REPO_ROOT,
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const [stdout, stderr] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+    ]);
+    const exitCode = await proc.exited;
+    return { exitCode, stdout, stderr };
+  }
+
+  test("start --output starts the recorder, status says running, stop ends it", async () => {
+    const out = join(scratch, "run.mp4");
+    const start = await runRecord(["record", "start", "--output", out]);
+    expect(start.exitCode).toBe(0);
+
+    const status = await runRecord(["record", "status"]);
+    expect(status.exitCode).toBe(0);
+    const parsed = JSON.parse(status.stdout) as {
+      running: boolean;
+      output: string;
+    };
+    expect(parsed.running).toBe(true);
+    expect(parsed.output).toBe(out);
+
+    const stop = await runRecord(["record", "stop"]);
+    expect(stop.exitCode).toBe(0);
+
+    const after = await runRecord(["record", "status"]);
+    expect(after.exitCode).toBe(0);
+    const afterParsed = JSON.parse(after.stdout) as { running: boolean };
+    expect(afterParsed.running).toBe(false);
+  });
+
+  test("start without --output exits 2", async () => {
+    const result = await runRecord(["record", "start"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+
+  test("starting twice without stop exits 6 (RecorderError)", async () => {
+    const out = join(scratch, "run.mp4");
+    const first = await runRecord(["record", "start", "--output", out]);
+    expect(first.exitCode).toBe(0);
+
+    const second = await runRecord(["record", "start", "--output", out]);
+    expect(second.exitCode).toBe(6);
+
+    await runRecord(["record", "stop"]);
+  });
+
+  test("missing record sub-action exits 2", async () => {
+    const result = await runRecord(["record"]);
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("unknown record sub-action exits 2", async () => {
+    const result = await runRecord(["record", "frobnicate"]);
+    expect(result.exitCode).toBe(2);
+  });
 });
