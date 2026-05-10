@@ -69,23 +69,25 @@ GTK4 + Rust で書かれた Native GUI アプリケーションに対し、Playw
 
 ### 入手方法
 
-- **CI artifact**: GitHub Actions の `record-demo` ジョブ ([`../.github/workflows/ci.yml`](../.github/workflows/ci.yml)) 成果物として `demo-run-mp4` (mp4 1 本、retention 30 日) を upload。最新 main の Actions run → Artifacts → `demo-run-mp4` → 解凍 → `demo-run.mp4`。
-- **ローカル再生**: Linux + X11 + ffmpeg + GTK4 環境で `bash packages/demo/scripts/record-run.sh` ([`../packages/demo/scripts/record-run.sh`](../packages/demo/scripts/record-run.sh)) を実行 → [`../artifacts/demo-run.mp4`](../artifacts/demo-run.mp4) に出力 (`.gitignore` 対象なので tracked にはならない)。
+- **ローカル生成 (唯一の入手手段)**: Linux + X11 + ffmpeg + GTK4 環境で `bash packages/demo/scripts/record-run.sh` ([`../packages/demo/scripts/record-run.sh`](../packages/demo/scripts/record-run.sh)) を実行 → [`../artifacts/demo-run.mp4`](../artifacts/demo-run.mp4) に出力 (`.gitignore` 対象なので tracked にはならない)。headless で回したいときは `xvfb-run -a --server-args="-screen 0 1280x720x24" bash packages/demo/scripts/record-run.sh`。
 - **macOS / Wayland**: 録画 backend が X11 only のため exit code 6 (`RecorderError`) で即時失敗 (T009 MVP 範囲)。
+- **CI artifact は提供しない (T016)**: かつて `record-demo` ジョブが mp4 を upload していたが、PR / push 双方で xvfb + ffmpeg + cargo build + scenarios に約 2 分の恒常コストがかかる割に「report 時にローカルで見られれば十分」と判断され、T016 で job ごと削除した。録画は report / レビューで必要になったときに上記コマンドで都度生成する運用とする。
 
-ローカルでは記録するごとに `artifacts/demo-run.mp4` を上書きする運用とし、**CI artifact が source of truth**。本 worktree のチェックアウト時点では `artifacts/` ディレクトリは存在しない (`.gitignore` + `record-run.sh` 未実行)。
+ローカルでは記録するごとに `artifacts/demo-run.mp4` を上書きする運用とし、**ローカル実行が唯一の source of truth**（共有が必要なら手元の mp4 を PR コメント / Slack 等で添付する）。本 worktree のチェックアウト時点では `artifacts/` ディレクトリは存在しない (`.gitignore` + `record-run.sh` 未実行)。
 
-### 録画保存方法の判断 (T011)
+### 録画保存方法の判断 (T011 → T016 で再判断)
 
-`(b) GH Actions artifact` を採用する。
+**現行: (d) ローカル運用 (T016 採択)**。CI には `record-demo` ジョブを持たず、必要な人が `bash packages/demo/scripts/record-run.sh` を都度実行する。
 
-- `(a) repo commit / git lfs`: mp4 サイズ未測定でリスク大、却下。将来サイズ実測後に降りる余地は plan に明文化済 (5MB / 50MB しきい値)。
-- `(c) Release`: 手動ステップ多く運用負荷高、却下。
-- `(b)` は再現可能・retention で容量管理可能・run 単位 URL で共有可能。
+判断履歴:
+
+- T011 で `(b) GH Actions artifact` を採用 (再現可能・retention で容量管理可能・run 単位 URL で共有可能、`(a) repo commit / git lfs` はサイズ未測定で却下、`(c) Release` は手動ステップ多く却下)。
+- T016 で再判断: 動画は report / レビューでたまに見られれば十分で、PR / push 双方の CI で xvfb + ffmpeg + cargo build + scenarios を毎回回す約 2 分のコストに見合わない。`(b)` から `(d) ローカル運用` に降格。
+- `(a) repo commit / git lfs` および `(c) Release` の却下理由は再判断後も有効。
 
 ### 録画内容
 
-既存 3 spec (`screenshot.spec.ts` / `events.spec.ts` / `tap-wait.spec.ts`) を `bun test packages/demo/scenarios/` で一括実行する流れを xvfb (`1280x720x24`) で 1 ラン録画。GitHub README は mp4 inline 再生不可なので、本節には外部リンクのみで十分。
+既存 3 spec (`screenshot.spec.ts` / `events.spec.ts` / `tap-wait.spec.ts`) を `bun test packages/demo/scenarios/` で一括実行する流れを xvfb (`1280x720x24`) で 1 ラン録画。CI artifact 化はせず、ローカル生成 (上記コマンド) のみで提供する。GitHub README は mp4 inline 再生不可なので、共有が必要なときは手元の mp4 を PR コメント等に添付する運用とする。
 
 ---
 
@@ -138,7 +140,6 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 - **`InstanceFile` の SSOT 化**: registry file format `InstanceFile` は現在 SDK 側 (TS) と server 側 (Rust) で別個に書かれている (ADR-0002 Open Question)。
 - **`packages/server/src/cli.ts` の executable bit 変更** (T006): Conductor 判断保留のまま `100755` 状態。
 - **手動検証 skip 項目**: T003 の window close → registry cleanup、T009 の Claude Code 上 plugin install、T011 の Linux X11 golden path は CI / display 持ちレビュアーに委譲。
-- **`record-demo` CI コスト**: PR と push 双方で回るため、コスト高なら main only に降格する余地 (T011 M-2 (c))。
 
 ### ADR-0002 の status
 
@@ -151,7 +152,7 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 各 task の summary から「Master 判断ポイント」相当を集約。決定事項 + 採用理由の形で列挙する。
 
 - **`.team/` ディレクトリの git 扱い**: 本 repo では `.team/tasks/*/runs/*/` 以下のすべての成果物 (plan / summary / inspection) は repo に commit せず別管理 (worktree limited)。`.gitignore` には `.team/` の明示記述なし、`.team/` 配下を main に push しない運用とする。
-- **録画保存方法**: GH Actions artifact 採用 (T011)。理由は §C 参照 (再現可能 + retention 管理 + run 単位 URL 共有)。
+- **録画保存方法**: T011 で GH Actions artifact (`(b)`) を採用したが、T016 でローカル運用 (`(d)`) に再降格。理由は §C 参照 (CI コストに見合わず、report 時にローカル生成すれば十分)。
 - **TS 型生成ツール**: `json-schema-to-typescript` (npm v15) を採用 (ADR-0002 D1)。`typeshare` / `ts-rs` を却下した理由: SSOT 二重化を避け JSON Schema 中間表現で OpenAPI / 他言語 SDK への展開余地を残すため。
 - **schema 出力経路**: `examples/gen-schemas.rs` 経由 (build.rs 不採用、ADR-0002 D2)。理由: build.rs に struct 再定義する案は SSOT 違反、test 副作用案は race、build.rs から `cargo run` する案は reproducible build 破壊。
 - **stale check 戦略**: schema を commit、`*.gen.ts` は build artifact (ADR-0002 D4)。理由: schema diff 1 ファイルでも残れば CI が落ちる、TS formatter / 生成ツール version 差での false positive を回避。
@@ -175,7 +176,6 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 ### 短期 (consumer 接続を見据えた整備)
 
 - **Brainship 等の consumer への接続**: `gtk4-e2e-server` を consumer の `Cargo.toml` に `gtk4-e2e-server = { git = "...", features = ["e2e"] }` として追加 (debug build 時のみ)。consumer 側は `dev.foo.MyApp.start()` の中で `gtk4_e2e_server::start(&app)` を呼び、`Handle` を `Rc<RefCell<Option<Handle>>>` に root 保持する (T003 demo パターン参照)。scenario は別 repo / 別 directory に bun project として作る。
-- **CI コスト見直し** (T011 M-2): `record-demo` を `push: main` のみに降格、`scenarios` と統合する案。
 - **`tsc --noEmit` の baseline 解消 + CI 連携** (T005 申し送り)。
 - **Biome 導入** (T005 申し送り): `bun run lint` / `fmt:check` を実体化。
 - **ADR-0002 を `Accepted` 昇格** + ADR README に運用ルール追記。

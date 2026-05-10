@@ -101,24 +101,36 @@ await r.stop();
 
 ## Recorded demo run
 
-The CI job `record-demo` (`.github/workflows/ci.yml`) drives all scenarios
-under Xvfb while ffmpeg captures the X display, and uploads the resulting
-mp4 as a workflow artifact named `demo-run-mp4` (retention 30 days).
+A full-run recording drives all demo scenarios end-to-end and writes the
+result to `artifacts/demo-run.mp4` (gitignored). Recording is **local-only**
+— there is no CI job that publishes this mp4 as a workflow artifact, so
+generate it on demand when you need to share or review behavior.
 
-To download the latest recording:
+### Requirements
 
-1. Open the most recent CI run on `main` from the Actions tab
-2. Scroll to **Artifacts** → `demo-run-mp4` → download → unzip → `demo-run.mp4`
+- Linux X11 session (`$DISPLAY` set; Xvfb is fine — see the example below)
+- `ffmpeg` on PATH — `apt install ffmpeg` / `dnf install ffmpeg` / `brew install ffmpeg`
+- `xvfb-run` if you want a headless run on Linux (`apt install xvfb`)
+- A working build environment for the demo (GTK4 system deps, Rust toolchain, Bun)
 
-To regenerate locally (Linux X11 + `ffmpeg` on PATH required):
+### Generate the recording
 
 ```bash
+# On a graphical Linux X11 host (uses your active display)
 bash packages/demo/scripts/record-run.sh
+
+# Or headless via Xvfb (matches the historical CI resolution of 1280x720)
+xvfb-run -a --server-args="-screen 0 1280x720x24" \
+  bash packages/demo/scripts/record-run.sh
+
 # → artifacts/demo-run.mp4
 ```
 
+### Platform support
+
 macOS and Wayland sessions are not supported by the recorder (T009 MVP)
-and will exit with code 6 (`RecorderError`).
+and will exit with code 6 (`RecorderError`). Run on a Linux X11 host (or
+Xvfb) to produce the mp4.
 
 ## Claude Code integration
 
