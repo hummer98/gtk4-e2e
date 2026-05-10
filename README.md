@@ -68,6 +68,61 @@ The demo also prints the URL to stderr at startup:
 [gtk4-e2e-demo] server up on http://127.0.0.1:<port>/test/info
 ```
 
+## Recording (MVP: X11)
+
+Local screen recording is driven by `ffmpeg` and tracked via a single PID
+file under the runtime directory (one host = one recording in MVP). It is
+client-side only — no protocol endpoint is involved.
+
+```bash
+# Requires `ffmpeg` on PATH and an X11 server (`$DISPLAY` set).
+bunx gtk4-e2e record start --output run.mp4
+# ... drive the app via tap / scenarios ...
+bunx gtk4-e2e record stop
+bunx gtk4-e2e record status   # JSON: { running, output, pid, startedAt, elapsedMs }
+```
+
+Wayland sessions, macOS, and headless environments are out of MVP scope and
+exit with code 6 (`RecorderError`). Install ffmpeg via `apt install ffmpeg` /
+`brew install ffmpeg` / `dnf install ffmpeg`.
+
+The `Recorder` class is also exported from the SDK:
+
+```ts
+import { Recorder } from "gtk4-e2e";
+const r = new Recorder({ output: "run.mp4" });
+await r.start();
+// ...
+await r.stop();
+```
+
+## Claude Code integration
+
+A Claude Code plugin lives under `packages/client/claude-plugin/` with
+three slash commands and an auto-triggering SKILL:
+
+| Slash command | Purpose |
+|---|---|
+| `/gtk4-e2e:e2e-tap`      | Tap a widget by selector or coordinates |
+| `/gtk4-e2e:e2e-record`   | Manage screen recording (start / stop / status) |
+| `/gtk4-e2e:e2e-scenario` | Run a `bun test` scenario file |
+
+The SKILL (`skills/gtk4-e2e/SKILL.md`) auto-triggers on phrases like
+"gtk4-e2e", "demo を tap", "画面を録画", "scenario を流す" and routes them
+to the underlying `bunx gtk4-e2e ...` calls.
+
+Local install (linked from this checkout — recommended for development):
+
+```bash
+# from the repo root
+mkdir -p ~/.claude/plugins/local
+ln -snf "$(pwd)/packages/client/claude-plugin" ~/.claude/plugins/local/gtk4-e2e
+```
+
+Then enable it via `/plugin` inside Claude Code. The plugin manifest
+follows the current `.claude-plugin/plugin.json` convention; the older
+`manifest.json` filename is no longer used.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
