@@ -53,3 +53,41 @@ jobs:
           grep -q "export interface Info" packages/client/src/types.gen.ts
           grep -q "Capability" packages/client/src/types.gen.ts
       - run: bun test --pass-with-no-tests
+
+  scenarios:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install GTK4 + xvfb system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libglib2.0-dev \
+            pkg-config \
+            build-essential \
+            xvfb \
+            dbus-x11
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - name: Build demo binary (--features e2e)
+        run: cargo build -p gtk4-e2e-demo --features e2e
+      - name: Run demo scenarios under xvfb
+        run: |
+          mkdir -p /tmp/scenario-artifacts
+          xvfb-run -a --server-args="-screen 0 1280x720x24" \
+            bun test packages/demo/scenarios/
+      - name: Upload scenario artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-artifacts
+          path: |
+            /tmp/scenario-artifacts/
+            /tmp/gtk4-e2e-demo-*.log
+          if-no-files-found: ignore
+          retention-days: 7

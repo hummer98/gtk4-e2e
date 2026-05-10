@@ -1,13 +1,13 @@
 //! HTTP layer (axum).
 //!
-//! Routes (plan §Q11):
+//! Routes (plan §Q11 / §Q4 Step 6):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
 //! | `/test/info`         | GET    | 200     | —       |
 //! | `/test/tap`          | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
-//! | `/test/screenshot`   | *      | —       | 501 (placeholder) |
+//! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | (any unknown)        | *      | —       | 501 (axum fallback) |
 //!
 //! Plan Review M2: 501 = capability missing. 404 = domain not-found (only
@@ -16,8 +16,9 @@
 use std::sync::Arc;
 
 use axum::{
+    body::Bytes,
     extract::{Request, State},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -28,6 +29,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::input::TapError;
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{Info, TapTarget, WaitRequest};
+use crate::snapshot::ScreenshotError;
 use crate::tree::parse_selector;
 use crate::wait::{poll_until, WaitError, MAX_TIMEOUT_MS};
 
@@ -44,7 +46,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/info", get(get_info))
         .route("/test/tap", post(post_tap))
         .route("/test/wait", post(post_wait))
-        .route("/test/screenshot", get(unimpl).post(unimpl))
+        .route("/test/screenshot", get(get_screenshot))
         .fallback(unimpl)
         .with_state(state)
 }
@@ -171,6 +173,40 @@ async fn post_wait(State(state): State<AppState>, body: String) -> Response {
         Err(WaitError::Eval(WaitEvalError::Internal(msg))) | Err(WaitError::Internal(msg)) => {
             server_error(&msg)
         }
+    }
+}
+
+async fn get_screenshot(State(state): State<AppState>) -> Response {
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Screenshot { reply: tx })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    let outcome = match rx.await {
+        Ok(o) => o,
+        Err(_) => return server_error("main_thread reply dropped"),
+    };
+    match outcome {
+        Ok(bytes) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/png")],
+            Bytes::from(bytes),
+        )
+            .into_response(),
+        Err(e) => screenshot_error_response(e),
+    }
+}
+
+fn screenshot_error_response(e: ScreenshotError) -> Response {
+    match e {
+        ScreenshotError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        ScreenshotError::EmptyNode => validation_error("empty_node", json!({})),
+        ScreenshotError::ZeroSize => validation_error("zero_size", json!({})),
+        ScreenshotError::RenderRealize(msg) => server_error(&format!("render_failed: {msg}")),
     }
 }
 

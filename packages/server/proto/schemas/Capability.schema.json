@@ -1,11 +1,12 @@
 {
   "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Capability identifiers advertised in `Info.capabilities`.\n\nVariants are appended in the order in which they are surfaced. Plan §Q10 fixes the deterministic ordering `[Info, Tap, Wait]`.",
+  "description": "Capability identifiers advertised in `Info.capabilities`.\n\nVariants are appended in the order in which they are surfaced. Step 6 extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.",
   "enum": [
     "info",
     "tap",
-    "wait"
+    "wait",
+    "screenshot"
   ],
   "title": "Capability",
   "type": "string"

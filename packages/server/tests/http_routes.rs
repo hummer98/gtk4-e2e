@@ -51,32 +51,6 @@ async fn body_json(resp: axum::response::Response) -> Value {
 // ----- 501 / 4xx paths (no GTK needed) -----
 
 #[tokio::test]
-async fn screenshot_returns_501() {
-    let (state, _tx) = make_state();
-    let app = router(state);
-    let resp = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/test/screenshot")
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(resp.status(), StatusCode::NOT_IMPLEMENTED);
-    let v = body_json(resp).await;
-    assert_eq!(
-        v.get("error").and_then(Value::as_str),
-        Some("not_implemented")
-    );
-    assert_eq!(
-        v.get("capability").and_then(Value::as_str),
-        Some("screenshot")
-    );
-}
-
-#[tokio::test]
 async fn unknown_route_returns_501() {
     let (state, _tx) = make_state();
     let app = router(state);
@@ -435,4 +409,104 @@ async fn wait_times_out_408() {
 
     window.close();
     common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_endpoint_returns_png() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest5")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let label = gtk::Label::new(Some("scr"));
+    label.set_widget_name("label1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&label)
+        .default_width(64)
+        .default_height(48)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/png")
+    );
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    assert!(
+        bytes.len() > 100,
+        "PNG body suspiciously small: {} bytes",
+        bytes.len()
+    );
+    assert_eq!(
+        &bytes[..8],
+        b"\x89PNG\r\n\x1a\n",
+        "missing PNG signature in first 8 bytes"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_no_active_window_returns_422() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest6")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(32);
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("no_active_window")
+    );
 }

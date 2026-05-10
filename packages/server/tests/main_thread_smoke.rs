@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use gtk4_e2e_server::gtk::glib;
 use gtk4_e2e_server::main_thread::{spawn_receiver_loop, MainCmd};
+use gtk4_e2e_server::snapshot::ScreenshotError;
 
 #[test]
 fn oneshot_roundtrip_under_glib_and_tokio() {
@@ -72,6 +73,67 @@ fn oneshot_roundtrip_under_glib_and_tokio() {
 
         if Instant::now() >= deadline {
             panic!("oneshot reply did not arrive within 5s — cross-runtime dispatch is broken");
+        }
+    }
+}
+
+#[test]
+fn screenshot_cmd_roundtrip() {
+    // Plan §Phase 1: prove `MainCmd::Screenshot` round-trips through the
+    // receiver loop without needing a display. With no `gtk::Application`
+    // installed, `with_app` yields `None` and the handler is expected to send
+    // `Err(NoActiveWindow)` back without panicking.
+    if !common::ensure_gtk_init() {
+        eprintln!("[skip] no GTK display available");
+        return;
+    }
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let (reply_tx, reply_rx) = tokio::sync::oneshot::channel::<Result<Vec<u8>, ScreenshotError>>();
+    let cmd_tx_clone = cmd_tx.clone();
+    rt.spawn(async move {
+        cmd_tx_clone
+            .send(MainCmd::Screenshot { reply: reply_tx })
+            .await
+            .expect("worker → main_thread send should succeed");
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let main_ctx = glib::MainContext::default();
+    let mut reply_rx = reply_rx;
+    loop {
+        for _ in 0..16 {
+            if !main_ctx.iteration(false) {
+                break;
+            }
+        }
+        let outcome = rt.block_on(async {
+            tokio::time::timeout(Duration::from_millis(50), &mut reply_rx).await
+        });
+        match outcome {
+            Ok(Ok(result)) => {
+                // Without an installed Application, the handler falls back to
+                // NoActiveWindow. Either Err shape is acceptable as long as
+                // the cmd round-tripped without dropping the channel.
+                assert!(
+                    matches!(result, Err(ScreenshotError::NoActiveWindow)),
+                    "expected Err(NoActiveWindow) without Application, got {result:?}"
+                );
+                return;
+            }
+            Ok(Err(_)) => panic!("oneshot reply channel closed without sending"),
+            Err(_) => {}
+        }
+        if Instant::now() >= deadline {
+            panic!("screenshot oneshot reply did not arrive within 5s");
         }
     }
 }

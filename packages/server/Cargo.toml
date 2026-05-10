@@ -9,7 +9,7 @@ description = "In-process e2e test server for GTK4 + Rust apps. Step 1 spike."
 path = "src/lib.rs"
 
 [dependencies]
-gtk4 = { version = "0.9", optional = true, default-features = false }
+gtk4 = { version = "0.9", optional = true, default-features = false, features = ["v4_6"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "net", "time"], optional = true }
 axum = { version = "0.7", optional = true }
 serde = { version = "1", features = ["derive"], optional = true }

@@ -89,9 +89,29 @@ fn capability_includes_tap_wait() {
 }
 
 #[test]
+fn capability_enum_lists_screenshot_at_tail() {
+    // Plan §Q5: Capability ordering must end with Screenshot after Step 6.
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+
+    let bytes = fs::read(tmp.path().join("Capability.schema.json")).unwrap();
+    let v: Value = serde_json::from_slice(&bytes).unwrap();
+    let arr = v
+        .get("enum")
+        .and_then(Value::as_array)
+        .expect("Capability schema should have enum array");
+    let strs: Vec<&str> = arr.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        strs,
+        vec!["info", "tap", "wait", "screenshot"],
+        "Capability enum order must be [info, tap, wait, screenshot]"
+    );
+}
+
+#[test]
 fn capabilities_order_is_stable() {
-    // info.capabilities ordering must be deterministic (info, tap, wait)
-    // — anchored as an invariant so future re-orderings break this test.
+    // info.capabilities ordering must be deterministic — anchored as an
+    // invariant so future re-orderings break this test.
     let info = gtk4_e2e_server::Info {
         instance_id: "x".into(),
         pid: 0,
@@ -102,6 +122,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Info,
             gtk4_e2e_server::Capability::Tap,
             gtk4_e2e_server::Capability::Wait,
+            gtk4_e2e_server::Capability::Screenshot,
         ],
         token_required: None,
     };
@@ -111,6 +132,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Info,
             gtk4_e2e_server::Capability::Tap,
             gtk4_e2e_server::Capability::Wait,
+            gtk4_e2e_server::Capability::Screenshot,
         ]
     );
 }

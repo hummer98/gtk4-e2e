@@ -23,6 +23,7 @@ use tokio::sync::oneshot;
 
 use crate::input::TapError;
 use crate::proto::{TapTarget, WaitCondition};
+use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,6 +63,10 @@ pub enum MainCmd {
     EvalWait {
         condition: WaitCondition,
         reply: oneshot::Sender<WaitTickResult>,
+    },
+    /// Capture the active window as PNG bytes.
+    Screenshot {
+        reply: oneshot::Sender<Result<Vec<u8>, ScreenshotError>>,
     },
 }
 
@@ -118,6 +123,11 @@ fn handle_cmd(cmd: MainCmd) {
                 .unwrap_or(WaitTickResult::PermanentFailure(WaitEvalError::Internal(
                     "no_active_window".into(),
                 )));
+            let _ = reply.send(outcome);
+        }
+        MainCmd::Screenshot { reply } => {
+            let outcome = with_app(crate::snapshot::render_active_window)
+                .unwrap_or(Err(ScreenshotError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
     }

@@ -20,14 +20,15 @@ pub struct Info {
 
 /// Capability identifiers advertised in `Info.capabilities`.
 ///
-/// Variants are appended in the order in which they are surfaced. Plan §Q10
-/// fixes the deterministic ordering `[Info, Tap, Wait]`.
+/// Variants are appended in the order in which they are surfaced. Step 6
+/// extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     Info,
     Tap,
     Wait,
+    Screenshot,
 }
 
 /// Window-local pixel coordinates (top-left origin).

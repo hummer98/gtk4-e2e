@@ -21,6 +21,8 @@ mod registry;
 #[cfg(feature = "e2e")]
 mod schema_export;
 #[cfg(feature = "e2e")]
+pub mod snapshot;
+#[cfg(feature = "e2e")]
 pub mod tree;
 #[cfg(feature = "e2e")]
 pub mod wait;
@@ -110,7 +112,12 @@ mod start_impl {
             port,
             app_name: app_name.clone(),
             app_version: app_version.clone(),
-            capabilities: vec![Capability::Info, Capability::Tap, Capability::Wait],
+            capabilities: vec![
+                Capability::Info,
+                Capability::Tap,
+                Capability::Wait,
+                Capability::Screenshot,
+            ],
             token_required: token.as_ref().map(|_| true),
         });
 
