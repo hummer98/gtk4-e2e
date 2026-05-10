@@ -26,6 +26,7 @@ import {
 import type {
   Info,
   TapTarget,
+  TypeRequest,
   WaitCondition,
   WaitResult,
 } from "./types.gen.ts";
@@ -108,6 +109,23 @@ export class E2EClient {
       path: "/test/tap",
       body,
       capability: "tap",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Replace the text content of an `Entry` / `Editable` / `TextView` widget.
+   *
+   * MVP semantics (Step 9 plan §2.2): full replacement, not "insert at
+   * cursor". Empty `text` is allowed and clears the widget.
+   */
+  async type(selector: string, text: string): Promise<void> {
+    const body: TypeRequest = { selector, text };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/type",
+      body,
+      capability: "type",
       expect: "void",
     });
   }

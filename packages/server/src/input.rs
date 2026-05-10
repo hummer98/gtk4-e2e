@@ -128,3 +128,81 @@ fn widget_contains_point(parent: &gtk::Widget, widget: &gtk::Widget, x: f64, y: 
         false
     }
 }
+
+/// Domain errors surfaced by the `type` pipeline (Step 9).
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error              | http |
+/// |--------------------|------|
+/// | `SelectorNotFound` | 404  |
+/// | `UnsupportedWidget`| 422  |
+/// | `WidgetNotVisible` | 422  |
+/// | `WidgetDisabled`   | 422  |
+/// | `NoActiveWindow`   | 422  |
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypeError {
+    SelectorNotFound { selector: String },
+    UnsupportedWidget { widget_type: String },
+    WidgetNotVisible { selector: Option<String> },
+    WidgetDisabled { selector: Option<String> },
+    NoActiveWindow,
+}
+
+impl std::fmt::Display for TypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            TypeError::UnsupportedWidget { widget_type } => {
+                write!(f, "type_unsupported_widget: {widget_type}")
+            }
+            TypeError::WidgetNotVisible { selector } => match selector {
+                Some(s) => write!(f, "widget_not_visible: {s}"),
+                None => write!(f, "widget_not_visible"),
+            },
+            TypeError::WidgetDisabled { selector } => match selector {
+                Some(s) => write!(f, "widget_disabled: {s}"),
+                None => write!(f, "widget_disabled"),
+            },
+            TypeError::NoActiveWindow => write!(f, "no_active_window"),
+        }
+    }
+}
+
+impl std::error::Error for TypeError {}
+
+/// Replace the text content of an `Editable` (`Entry` / `SearchEntry` /
+/// `PasswordEntry` / `SpinButton` / `Text`) or `TextView` widget with `text`.
+///
+/// MVP semantics (plan §2.2): full replacement, not "insert at cursor".
+/// Visibility and sensitivity guards run before kind dispatch so the error
+/// surface matches `tap_widget`'s mental model.
+pub fn type_text(
+    widget: &gtk::Widget,
+    text: &str,
+    selector: Option<&str>,
+) -> Result<(), TypeError> {
+    if !widget.is_visible() || !widget.is_mapped() {
+        return Err(TypeError::WidgetNotVisible {
+            selector: selector.map(str::to_string),
+        });
+    }
+    if !widget.is_sensitive() {
+        return Err(TypeError::WidgetDisabled {
+            selector: selector.map(str::to_string),
+        });
+    }
+    if let Some(editable) = widget.dynamic_cast_ref::<gtk::Editable>() {
+        editable.set_text(text);
+        return Ok(());
+    }
+    if let Some(tv) = widget.downcast_ref::<gtk::TextView>() {
+        tv.buffer().set_text(text);
+        return Ok(());
+    }
+    Err(TypeError::UnsupportedWidget {
+        widget_type: widget.type_().name().to_string(),
+    })
+}

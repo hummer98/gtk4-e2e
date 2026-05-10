@@ -1,6 +1,6 @@
 //! HTTP layer (axum).
 //!
-//! Routes (plan §Q11 / §Q4 Step 6):
+//! Routes (plan §Q11 / §Q4 Step 6 / Step 9):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
@@ -8,6 +8,7 @@
 //! | `/test/tap`          | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
+//! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | (any unknown)        | *      | —       | 501 (axum fallback) |
 //!
 //! Plan Review M2: 501 = capability missing. 404 = domain not-found (only
@@ -26,9 +27,9 @@ use axum::{
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::input::TapError;
+use crate::input::{TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError};
-use crate::proto::{EventEnvelope, Info, TapTarget, WaitRequest};
+use crate::proto::{EventEnvelope, Info, TapTarget, TypeRequest, WaitRequest};
 use crate::snapshot::ScreenshotError;
 use crate::tree::parse_selector;
 use crate::wait::{poll_until, WaitError, MAX_TIMEOUT_MS};
@@ -50,6 +51,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/tap", post(post_tap))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
+        .route("/test/type", post(post_type))
         .route("/test/events", get(crate::ws::ws_events))
         .fallback(unimpl)
         .with_state(state)
@@ -202,6 +204,62 @@ async fn get_screenshot(State(state): State<AppState>) -> Response {
         )
             .into_response(),
         Err(e) => screenshot_error_response(e),
+    }
+}
+
+async fn post_type(State(state): State<AppState>, body: String) -> Response {
+    let req: TypeRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    // Pre-validate selector before crossing into the GLib main thread, so the
+    // parser error becomes 422 invalid_selector rather than 404. Mirror of
+    // `post_tap`. `dispatch_type` defends against bypass with a 404 fallback,
+    // see `wait.rs::dispatch_type`.
+    if let Err(e) = parse_selector(&req.selector) {
+        return validation_error("invalid_selector", json!({"reason": e.reason}));
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Type {
+            request: req,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    let outcome = match rx.await {
+        Ok(o) => o,
+        Err(_) => return server_error("main_thread reply dropped"),
+    };
+    match outcome {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => type_error_response(e),
+    }
+}
+
+fn type_error_response(e: TypeError) -> Response {
+    match e {
+        TypeError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        TypeError::UnsupportedWidget { widget_type } => validation_error(
+            "type_unsupported_widget",
+            json!({ "widget_type": widget_type }),
+        ),
+        TypeError::WidgetNotVisible { selector } => {
+            validation_error("widget_not_visible", json!({ "selector": selector }))
+        }
+        TypeError::WidgetDisabled { selector } => {
+            validation_error("widget_disabled", json!({ "selector": selector }))
+        }
+        TypeError::NoActiveWindow => validation_error("no_active_window", json!({})),
     }
 }
 

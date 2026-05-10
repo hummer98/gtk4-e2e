@@ -94,6 +94,7 @@ fn capability_includes_events() {
         Capability::Wait,
         Capability::Screenshot,
         Capability::Events,
+        Capability::Type,
     ];
     assert!(
         caps.contains(&Capability::Events),
@@ -101,7 +102,7 @@ fn capability_includes_events() {
     );
     assert_eq!(
         caps.last(),
-        Some(&Capability::Events),
-        "Events must be the trailing variant after Step 7"
+        Some(&Capability::Type),
+        "Type must be the trailing variant after Step 9"
     );
 }

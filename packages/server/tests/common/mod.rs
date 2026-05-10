@@ -75,6 +75,47 @@ pub fn build_demo_widgets() -> Option<(gtk::ApplicationWindow, gtk::Entry, gtk::
     Some((window, entry, button, label))
 }
 
+/// Build a window with widgets sized for `type` capability tests
+/// (Step 9): an `Entry` (#input1, initially empty), a `TextView` (#tv1), and
+/// a `Label` (#label1) for the unsupported-widget path. Kept separate from
+/// `build_demo_widgets` so existing tap/wait tests do not need re-balancing.
+pub fn build_type_widgets() -> Option<(
+    gtk::ApplicationWindow,
+    gtk::Entry,
+    gtk::TextView,
+    gtk::Label,
+)> {
+    if !gtk::is_initialized() {
+        return None;
+    }
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.test")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+
+    let entry = gtk::Entry::builder().build();
+    entry.set_widget_name("input1");
+    let text_view = gtk::TextView::builder().build();
+    text_view.set_widget_name("tv1");
+    let label = gtk::Label::new(Some("not editable"));
+    label.set_widget_name("label1");
+
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&entry);
+    vbox.append(&text_view);
+    vbox.append(&label);
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .title("test")
+        .child(&vbox)
+        .build();
+
+    Some((window, entry, text_view, label))
+}
+
 /// Pump the GLib main loop a bounded number of iterations so synchronous
 /// signal handlers fire and widget state stabilises. Returns when no work is
 /// pending or when `max_iters` is exhausted.

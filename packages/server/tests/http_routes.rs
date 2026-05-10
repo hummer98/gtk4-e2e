@@ -36,6 +36,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Wait,
             Capability::Screenshot,
             Capability::Events,
+            Capability::Type,
         ],
         token_required: None,
     });
@@ -477,6 +478,170 @@ async fn screenshot_endpoint_returns_png() {
         &bytes[..8],
         b"\x89PNG\r\n\x1a\n",
         "missing PNG signature in first 8 bytes"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- Step 9: type capability -----
+
+#[tokio::test]
+async fn type_invalid_selector_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/type")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\".bad\",\"text\":\"x\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_selector")
+    );
+}
+
+#[tokio::test]
+async fn type_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/type")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn type_capability_in_info() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/info")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    let caps = v
+        .get("capabilities")
+        .and_then(Value::as_array)
+        .expect("capabilities array");
+    let cap_strs: Vec<&str> = caps.iter().filter_map(Value::as_str).collect();
+    assert_eq!(
+        cap_strs,
+        vec!["info", "tap", "wait", "screenshot", "events", "type"],
+        "capabilities order must include type at the tail"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn type_endpoint_returns_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest7")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let entry = gtk::Entry::builder().build();
+    entry.set_widget_name("input1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&entry)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/type")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"#input1\",\"text\":\"world\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(entry.text().as_str(), "world");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn type_selector_not_found_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest8")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/type")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"#nosuch\",\"text\":\"x\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("selector_not_found")
     );
 
     window.close();

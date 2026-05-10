@@ -135,6 +135,7 @@ mod start_impl {
                 Capability::Wait,
                 Capability::Screenshot,
                 Capability::Events,
+                Capability::Type,
             ],
             token_required: token.as_ref().map(|_| true),
         });

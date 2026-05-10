@@ -27,6 +27,7 @@ const USAGE = `gtk4-e2e <subcommand> [args] [flags]
 Subcommands:
   info                              GET /test/info → JSON to stdout
   tap <selector|x,y>                POST /test/tap
+  type <selector> <text>            POST /test/type
   screenshot <out.png>              GET /test/screenshot → save to file
   record start --output <path>      start ffmpeg recording (X11 only in MVP)
   record stop                       stop the running recorder
@@ -193,6 +194,15 @@ async function runTap(parsed: ParsedArgs): Promise<void> {
   await client.tap(target);
 }
 
+async function runType(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 2) {
+    throw new ArgvError("type requires <selector> <text>");
+  }
+  const [selector, text] = parsed.positional;
+  const client = await buildClient(parsed);
+  await client.type(selector, text);
+}
+
 async function runScreenshot(parsed: ParsedArgs): Promise<void> {
   if (parsed.positional.length === 0) {
     throw new ArgvError("screenshot requires an output path");
@@ -292,6 +302,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "tap":
         await runTap(parsed);
+        return 0;
+      case "type":
+        await runType(parsed);
         return 0;
       case "screenshot":
         await runScreenshot(parsed);

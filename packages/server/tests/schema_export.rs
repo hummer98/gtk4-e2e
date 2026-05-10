@@ -14,6 +14,7 @@ const ALL_SCHEMA_FILES: &[&str] = &[
     "Info.schema.json",
     "Capability.schema.json",
     "TapTarget.schema.json",
+    "TypeRequest.schema.json",
     "WaitRequest.schema.json",
     "WaitCondition.schema.json",
     "WaitResult.schema.json",
@@ -91,8 +92,10 @@ fn capability_includes_tap_wait() {
 }
 
 #[test]
-fn capability_enum_lists_events_at_tail() {
-    // Plan §Q5 / Step 7: Capability ordering must end with Events.
+fn capability_enum_order_is_anchored() {
+    // Plan §Q5 / Step 9: Capability ordering must match the surfaced order.
+    // Step 7 anchored Events at the tail; Step 9 appends Type after Events.
+    // Generalised name so future capabilities don't force another rename.
     let tmp = tempfile::tempdir().unwrap();
     write_schemas(tmp.path()).unwrap();
 
@@ -105,8 +108,8 @@ fn capability_enum_lists_events_at_tail() {
     let strs: Vec<&str> = arr.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         strs,
-        vec!["info", "tap", "wait", "screenshot", "events"],
-        "Capability enum order must be [info, tap, wait, screenshot, events]"
+        vec!["info", "tap", "wait", "screenshot", "events", "type"],
+        "Capability enum order must be [info, tap, wait, screenshot, events, type]"
     );
 }
 
@@ -126,6 +129,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Wait,
             gtk4_e2e_server::Capability::Screenshot,
             gtk4_e2e_server::Capability::Events,
+            gtk4_e2e_server::Capability::Type,
         ],
         token_required: None,
     };
@@ -137,6 +141,7 @@ fn capabilities_order_is_stable() {
             gtk4_e2e_server::Capability::Wait,
             gtk4_e2e_server::Capability::Screenshot,
             gtk4_e2e_server::Capability::Events,
+            gtk4_e2e_server::Capability::Type,
         ]
     );
 }

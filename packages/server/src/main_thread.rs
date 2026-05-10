@@ -21,8 +21,8 @@ use crate::gtk::glib;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::input::TapError;
-use crate::proto::{TapTarget, WaitCondition};
+use crate::input::{TapError, TypeError};
+use crate::proto::{TapTarget, TypeRequest, WaitCondition};
 use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
@@ -67,6 +67,11 @@ pub enum MainCmd {
     /// Capture the active window as PNG bytes.
     Screenshot {
         reply: oneshot::Sender<Result<Vec<u8>, ScreenshotError>>,
+    },
+    /// Insert text into a widget (Step 9).
+    Type {
+        request: TypeRequest,
+        reply: oneshot::Sender<Result<(), TypeError>>,
     },
 }
 
@@ -128,6 +133,11 @@ fn handle_cmd(cmd: MainCmd) {
         MainCmd::Screenshot { reply } => {
             let outcome = with_app(crate::snapshot::render_active_window)
                 .unwrap_or(Err(ScreenshotError::NoActiveWindow));
+            let _ = reply.send(outcome);
+        }
+        MainCmd::Type { request, reply } => {
+            let outcome = with_app(|app| crate::wait::dispatch_type(app, &request))
+                .unwrap_or(Err(TypeError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
     }

@@ -23,6 +23,7 @@ pub struct Info {
 /// Variants are appended in the order in which they are surfaced. Step 6
 /// extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.
 /// Step 7 appends `Events` for the `WS /test/events` channel.
+/// Step 9 appends `Type` for the `POST /test/type` capability.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -31,6 +32,7 @@ pub enum Capability {
     Wait,
     Screenshot,
     Events,
+    Type,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -51,6 +53,17 @@ pub struct XY {
 pub enum TapTarget {
     Selector { selector: String },
     Xy { xy: XY },
+}
+
+/// Body of `POST /test/type` (Step 9).
+///
+/// MVP semantics: the server replaces the entire text content of the
+/// resolved widget (Entry / Editable / TextView) with `text`. There is no
+/// "insert at cursor" mode — see plan §2.2.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct TypeRequest {
+    pub selector: String,
+    pub text: String,
 }
 
 /// Body of `POST /test/wait`.

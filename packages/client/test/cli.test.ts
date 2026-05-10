@@ -31,6 +31,7 @@ interface MockServer {
 interface RouteHandlers {
   info?: () => Response | Promise<Response>;
   tap?: (body: unknown) => Response | Promise<Response>;
+  type?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
 }
 
@@ -56,6 +57,7 @@ function startMock(handlers: RouteHandlers): MockServer {
 
       if (url.pathname === "/test/info" && handlers.info) return handlers.info();
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
+      if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       return new Response("not found", { status: 404 });
     },
@@ -218,6 +220,48 @@ describe("cli tap", () => {
       String(mock.port),
     ]);
     expect(result.exitCode).toBe(3);
+  });
+});
+
+describe("cli type", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector,text} as POST /test/type body", async () => {
+    mock = startMock({
+      type: () => new Response(null, { status: 200 }),
+    });
+
+    const result = await runCli([
+      "type",
+      "#input1",
+      "hello",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      selector: "#input1",
+      text: "hello",
+    });
+  });
+
+  test("missing text argument exits 2", async () => {
+    mock = startMock({
+      type: () => new Response(null, { status: 200 }),
+    });
+
+    const result = await runCli([
+      "type",
+      "#input1",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.length).toBeGreaterThan(0);
   });
 });
 

@@ -24,6 +24,7 @@ export type {
   EventKind,
   Info,
   TapTarget,
+  TypeRequest,
   WaitCondition,
   WaitRequest,
   WaitResult,

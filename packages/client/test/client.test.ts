@@ -32,6 +32,7 @@ function pngBytes(): Uint8Array {
 interface RouteHandlers {
   info?: () => Response | Promise<Response>;
   tap?: (body: unknown) => Response | Promise<Response>;
+  type?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
 }
 
@@ -57,6 +58,7 @@ function startMock(handlers: RouteHandlers): MockServer {
 
       if (url.pathname === "/test/info" && handlers.info) return handlers.info();
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
+      if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       return new Response("not found", { status: 404 });
     },
@@ -210,6 +212,65 @@ describe("E2EClient.tap", () => {
     }
     expect(thrown).toBeInstanceOf(HttpError);
     expect((thrown as HttpError).status).toBe(500);
+  });
+});
+
+describe("E2EClient.type", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector,text} as POST /test/type body", async () => {
+    mock = startMock({
+      type: () => new Response(null, { status: 200 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.type("#input1", "hello");
+
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.method).toBe("POST");
+    expect(last?.path).toBe("/test/type");
+    expect(last?.body).toEqual({ selector: "#input1", text: "hello" });
+  });
+
+  test("throws HttpError on 404 selector_not_found", async () => {
+    mock = startMock({
+      type: () =>
+        new Response(JSON.stringify({ error: "selector_not_found", selector: "#x" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.type("#x", "foo");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(404);
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      type: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "type" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await expect(client.type("#x", "y")).rejects.toMatchObject({
+      name: "NotImplementedError",
+      capability: "type",
+      status: 501,
+    });
   });
 });
 

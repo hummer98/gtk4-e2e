@@ -13,7 +13,8 @@ use schemars::{schema_for, JsonSchema};
 use serde_json::Value;
 
 use crate::proto::{
-    Capability, EventEnvelope, EventKind, Info, TapTarget, WaitCondition, WaitRequest, WaitResult,
+    Capability, EventEnvelope, EventKind, Info, TapTarget, TypeRequest, WaitCondition, WaitRequest,
+    WaitResult,
 };
 
 const PROVENANCE: &str = "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand";
@@ -27,6 +28,7 @@ pub fn write_schemas(out_dir: &Path) -> io::Result<()> {
     write_one::<Info>(out_dir, "Info")?;
     write_one::<Capability>(out_dir, "Capability")?;
     write_one::<TapTarget>(out_dir, "TapTarget")?;
+    write_one::<TypeRequest>(out_dir, "TypeRequest")?;
     write_one::<WaitRequest>(out_dir, "WaitRequest")?;
     write_one::<WaitCondition>(out_dir, "WaitCondition")?;
     write_one::<WaitResult>(out_dir, "WaitResult")?;

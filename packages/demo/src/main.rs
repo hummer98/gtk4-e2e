@@ -62,6 +62,10 @@ fn build_ui(
     // as soon as the button is tapped.
     let entry = Entry::builder().text("hello").build();
     entry.set_widget_name("entry1");
+    // Step 9: secondary Entry for `type` capability scenarios (initial empty).
+    // No signal handlers — type.spec.ts asserts directly via `state_eq #input1.text`.
+    let input1 = Entry::builder().build();
+    input1.set_widget_name("input1");
     let label = Label::builder().label("waiting...").build();
     label.set_widget_name("label1");
     let button = Button::with_label("Apply");
@@ -108,6 +112,7 @@ fn build_ui(
         .halign(Align::Fill)
         .build();
     vbox.append(&entry);
+    vbox.append(&input1);
     vbox.append(&button);
     vbox.append(&label);
 

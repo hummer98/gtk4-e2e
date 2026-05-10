@@ -14,9 +14,9 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
-use crate::input::{resolve_xy, tap_widget, TapError};
+use crate::input::{resolve_xy, tap_widget, type_text, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
-use crate::proto::{TapTarget, WaitCondition, WaitResult};
+use crate::proto::{TapTarget, TypeRequest, WaitCondition, WaitResult};
 use crate::tree::{find_first, parse_selector, GtkTree, WidgetTree};
 
 /// Polling interval (plan §Q7: fixed 100 ms internal).
@@ -129,6 +129,31 @@ pub(crate) fn dispatch_tap(
             tap_widget(&widget, None)
         }
     }
+}
+
+/// GTK-bound entry point for `MainCmd::Type` (Step 9).
+///
+/// Mirrors `dispatch_tap` for the selector path: parse selector, resolve via
+/// `GtkTree`, then run the visibility / sensitivity / kind checks inside
+/// `type_text`. Selector-only — no xy variant for `type` in the MVP.
+pub(crate) fn dispatch_type(
+    app: &crate::gtk::Application,
+    req: &TypeRequest,
+) -> Result<(), TypeError> {
+    // The HTTP layer pre-validates the selector and returns 422
+    // `invalid_selector` before reaching this dispatch (see
+    // `http.rs::post_type`). The `map_err` below is defensive: if that
+    // pre-validation is ever removed or bypassed, surface the parse error
+    // as `SelectorNotFound` (404) rather than panic. Mirror of
+    // `dispatch_tap` (wait.rs:107-114).
+    let sel = parse_selector(&req.selector).map_err(|e| TypeError::SelectorNotFound {
+        selector: format!("{}: {}", req.selector, e.reason),
+    })?;
+    let tree = GtkTree { app };
+    let widget = find_first(tree, &sel).ok_or_else(|| TypeError::SelectorNotFound {
+        selector: req.selector.clone(),
+    })?;
+    type_text(&widget, &req.text, Some(&req.selector))
 }
 
 pub(crate) fn eval_condition_in_app(
