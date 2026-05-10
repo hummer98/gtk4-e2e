@@ -1,0 +1,50 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Condition long-polled by `/test/wait`.\n\nTagged on `kind` so SDK consumers can narrow the union by discriminator.",
+  "oneOf": [
+    {
+      "properties": {
+        "kind": {
+          "enum": [
+            "selector_visible"
+          ],
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "kind": {
+          "enum": [
+            "state_eq"
+          ],
+          "type": "string"
+        },
+        "property": {
+          "type": "string"
+        },
+        "selector": {
+          "type": "string"
+        },
+        "value": true
+      },
+      "required": [
+        "kind",
+        "property",
+        "selector",
+        "value"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "WaitCondition"
+}

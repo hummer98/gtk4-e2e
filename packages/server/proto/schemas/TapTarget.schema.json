@@ -1,0 +1,50 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "anyOf": [
+    {
+      "properties": {
+        "selector": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selector"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "xy": {
+          "$ref": "#/definitions/XY"
+        }
+      },
+      "required": [
+        "xy"
+      ],
+      "type": "object"
+    }
+  ],
+  "definitions": {
+    "XY": {
+      "description": "Window-local pixel coordinates (top-left origin).",
+      "properties": {
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Body of `POST /test/tap`.\n\nUntagged so the wire shape is `{ \"selector\": \"#btn1\" }` or `{ \"xy\": { \"x\": 1, \"y\": 2 } }`. Plan §Q10 explicitly forbids `pub type TapRequest = TapTarget` aliasing — `TapTarget` is the single name used end-to-end (schema title → TS type → SDK method signature).",
+  "title": "TapTarget"
+}

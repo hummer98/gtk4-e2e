@@ -26,6 +26,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo build
       - run: cargo test --all
+      - run: cargo test --all --features e2e
       - name: Codegen stale check (proto.rs → JSON Schema)
         run: |
           cargo run -p gtk4-e2e-server --example gen-schemas --features e2e

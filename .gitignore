@@ -4,10 +4,12 @@ target/
 Cargo.lock
 
 # Node / Bun
+# bun.lock を SSOT とし、npm 由来の package-lock.json はコミットしない
 node_modules/
 .bun/
 dist/
 *.log
+package-lock.json
 
 # Generated types (Rust → TS codegen output, must not be hand-edited)
 **/*.gen.ts

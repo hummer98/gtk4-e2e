@@ -168,9 +168,17 @@ describe("E2EClient.tap", () => {
     });
   });
 
-  test("throws NotImplementedError on 404", async () => {
+  // Plan Review M2: server returns 404 only for domain not-found (e.g.
+  // selector_not_found). 501 is the dedicated capability-missing channel,
+  // so 404 should surface as `HttpError` with the body intact for callers
+  // to inspect.
+  test("throws HttpError with selector_not_found body on 404", async () => {
     mock = startMock({
-      tap: () => new Response("not found", { status: 404 }),
+      tap: () =>
+        new Response(JSON.stringify({ error: "selector_not_found", selector: "#x" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
     });
 
     const client = new E2EClient({ baseUrl: mock.baseUrl });
@@ -180,8 +188,12 @@ describe("E2EClient.tap", () => {
     } catch (err) {
       thrown = err;
     }
-    expect(thrown).toBeInstanceOf(NotImplementedError);
-    expect((thrown as NotImplementedError).status).toBe(404);
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(404);
+    expect((thrown as HttpError).body).toMatchObject({
+      error: "selector_not_found",
+      selector: "#x",
+    });
   });
 
   test("throws HttpError on 500", async () => {

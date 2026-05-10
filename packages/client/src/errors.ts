@@ -38,3 +38,16 @@ export class NotImplementedError extends E2EError {
     this.status = status;
   }
 }
+
+// Long-polling deadline reached server-side (HTTP 408). Distinct from
+// HttpError so callers can `expect(...).rejects.toThrow(WaitTimeoutError)`
+// without conflating it with arbitrary 4xx failures. Plan §Q12.
+export class WaitTimeoutError extends E2EError {
+  readonly timeoutMs: number;
+
+  constructor(timeoutMs: number) {
+    super(`wait timed out after ${timeoutMs}ms`);
+    this.name = "WaitTimeoutError";
+    this.timeoutMs = timeoutMs;
+  }
+}

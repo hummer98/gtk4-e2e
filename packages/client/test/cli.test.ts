@@ -181,8 +181,35 @@ describe("cli tap", () => {
     expect(mock.receivedBodies.at(-1)?.body).toEqual({ selector: "#submit" });
   });
 
-  test("exits 3 on NotImplementedError (404)", async () => {
-    mock = startMock({});
+  test("exits 5 on HttpError (404 selector_not_found)", async () => {
+    // Plan Review M2: server 404 is now domain not-found (e.g.
+    // selector_not_found), not capability missing. Capability missing
+    // surfaces as 501 → exit 3.
+    mock = startMock({
+      tap: () =>
+        new Response(JSON.stringify({ error: "selector_not_found", selector: "#submit" }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const result = await runCli([
+      "tap",
+      "#submit",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(5);
+  });
+
+  test("exits 3 on NotImplementedError (501)", async () => {
+    mock = startMock({
+      tap: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "tap" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
 
     const result = await runCli([
       "tap",

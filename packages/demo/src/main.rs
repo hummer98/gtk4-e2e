@@ -51,11 +51,15 @@ fn main() {
 }
 
 fn build_ui(app: &Application) {
-    let entry = Entry::builder()
-        .placeholder_text("Type something...")
-        .build();
+    // Plan §Q13 / Review M6: Entry initial text must be `"hello"` so the
+    // scenario expectation (`state_eq label1.label = "hello"`) becomes true
+    // as soon as the button is tapped.
+    let entry = Entry::builder().text("hello").build();
+    entry.set_widget_name("entry1");
     let label = Label::builder().label("waiting...").build();
+    label.set_widget_name("label1");
     let button = Button::with_label("Apply");
+    button.set_widget_name("btn1");
 
     {
         let entry = entry.clone();

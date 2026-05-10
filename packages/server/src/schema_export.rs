@@ -1,9 +1,9 @@
 //! JSON Schema exporter — proto.rs SSOT → `*.schema.json` artifacts.
 //!
-//! Backs ADR-0002: schemars output is committed and acts as the stale-check
+//! Backs ADR-0002: schemars output is committed and acts as the SSOT diff
 //! anchor; TS types are derived from these files via
-//! `packages/client/scripts/gen-types.ts`. The exporter is feature-gated
-//! (`e2e`) so default builds remain free of `schemars`/`serde_json`.
+//! `packages/client/scripts/gen-types.ts`. Feature-gated (`e2e`) so default
+//! builds remain free of `schemars`/`serde_json`.
 
 use std::fs;
 use std::io;
@@ -12,11 +12,11 @@ use std::path::Path;
 use schemars::{schema_for, JsonSchema};
 use serde_json::Value;
 
-use crate::proto::{Capability, Info};
+use crate::proto::{Capability, Info, TapTarget, WaitCondition, WaitRequest, WaitResult};
 
 const PROVENANCE: &str = "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand";
 
-/// Emit `Info.schema.json` and `Capability.schema.json` into `out_dir`.
+/// Emit `*.schema.json` files for every SSOT proto type into `out_dir`.
 ///
 /// Each file is pretty-printed JSON (2-space indent), terminates with a single
 /// LF, and carries a top-level `$comment` referencing the SSOT.
@@ -24,6 +24,10 @@ pub fn write_schemas(out_dir: &Path) -> io::Result<()> {
     fs::create_dir_all(out_dir)?;
     write_one::<Info>(out_dir, "Info")?;
     write_one::<Capability>(out_dir, "Capability")?;
+    write_one::<TapTarget>(out_dir, "TapTarget")?;
+    write_one::<WaitRequest>(out_dir, "WaitRequest")?;
+    write_one::<WaitCondition>(out_dir, "WaitCondition")?;
+    write_one::<WaitResult>(out_dir, "WaitResult")?;
     Ok(())
 }
 

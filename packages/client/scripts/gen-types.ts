@@ -61,8 +61,33 @@ function splitTopLevel(ts: string): string[] {
     }
 
     if (head[1] === "type") {
-      const eol = text.indexOf("\n", i);
-      i = eol < 0 ? text.length : eol + 1;
+      // Type alias body may span multiple lines (e.g. untagged enums emit
+      // `export type Foo = ({ a: ... } | { b: ... })`). Read until the next
+      // top-level statement (a newline followed by `export `) or EOF, while
+      // tracking bracket depth so braces inside the alias body don't terminate
+      // the scan early.
+      const eq = text.indexOf("=", i);
+      if (eq < 0) {
+        i++;
+        continue;
+      }
+      let depth = 0;
+      let j = eq + 1;
+      while (j < text.length) {
+        const ch = text[j];
+        if (ch === "{" || ch === "(" || ch === "[") depth++;
+        else if (ch === "}" || ch === ")" || ch === "]") depth--;
+        else if (ch === "\n" && depth === 0) {
+          let k = j + 1;
+          while (k < text.length && text[k] !== "\n" && /\s/.test(text[k])) k++;
+          if (k >= text.length || text.startsWith("export ", k)) {
+            j++;
+            break;
+          }
+        }
+        j++;
+      }
+      i = j;
     } else {
       const open = text.indexOf("{", i);
       if (open < 0) break;

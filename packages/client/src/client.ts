@@ -1,26 +1,34 @@
-// HTTP client surface — see plan §Q2/Q3/Q4/Q6 for the design rationale.
+// HTTP client surface — see plan §Q11 / §Q12 for the response triage rules.
 //
-// `_request<T>` centralises the response triage:
-//   * 501 / 404  → NotImplementedError (server treats the capability as absent)
-//   * 4xx / 5xx  → HttpError (other failures)
-//   * ok + json  → parsed JSON
+//   * 501       → NotImplementedError (capability missing — plan Review M2)
+//   * 408       → WaitTimeoutError (long-poll deadline reached)
+//   * 4xx / 5xx → HttpError (everything else, including 404 selector_not_found)
+//   * ok + json → parsed JSON
 //   * ok + bytes → Uint8Array via `res.bytes()`
 //
-// `tap` and `screenshot` wire formats are provisional (Step 5 will land
-// `TapRequest` in proto.rs and re-align here). The shapes below are deliberately
-// matched to the SDK tests so the eventual proto.rs change can adjust both at
-// once.
+// Type imports come from `./types.gen.ts` (SSOT: server proto.rs → JSON Schema
+// → TS). The hand-written `TapTarget` type that used to live here was removed
+// in plan Review C3.
 
 import { discover, type DiscoverFilter, type InstanceFile } from "./discover.ts";
-import { DiscoveryError, E2EError, HttpError, NotImplementedError } from "./errors.ts";
-import type { Info } from "./types.gen.ts";
+import {
+  DiscoveryError,
+  E2EError,
+  HttpError,
+  NotImplementedError,
+  WaitTimeoutError,
+} from "./errors.ts";
+import type {
+  Info,
+  TapTarget,
+  WaitCondition,
+  WaitResult,
+} from "./types.gen.ts";
 
 interface ClientOptions {
   baseUrl: string;
   token?: string;
 }
-
-export type TapTarget = string | { x: number; y: number };
 
 type ResponseKind = "json" | "bytes" | "void";
 
@@ -30,7 +38,11 @@ interface RequestOptions {
   body?: unknown;
   capability: string;
   expect: ResponseKind;
+  /** Server-side deadline for long-poll endpoints; surfaced via WaitTimeoutError. */
+  waitTimeoutMs?: number;
 }
+
+const DEFAULT_WAIT_TIMEOUT_MS = 5_000;
 
 export class E2EClient {
   readonly baseUrl: string;
@@ -38,7 +50,14 @@ export class E2EClient {
 
   constructor(opts: ClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, "");
-    this.token = opts.token ?? process.env["GTK4_E2E_TOKEN"];
+    // Only fall back to the env var when the caller did not pass `token`
+    // explicitly. Passing `token: ""` opts out (used by demo scenarios that
+    // don't want to inherit the developer's local `GTK4_E2E_TOKEN`).
+    if (opts.token !== undefined) {
+      this.token = opts.token === "" ? undefined : opts.token;
+    } else {
+      this.token = process.env["GTK4_E2E_TOKEN"];
+    }
   }
 
   static async discover(filter: DiscoverFilter = {}): Promise<InstanceFile[]> {
@@ -73,17 +92,37 @@ export class E2EClient {
     });
   }
 
-  async tap(target: TapTarget): Promise<void> {
-    const body =
-      typeof target === "string"
-        ? { selector: target }
-        : { xy: { x: target.x, y: target.y } };
+  /**
+   * Synthesize a tap. Coordinates passed via `{ x, y }` are window-local with
+   * a top-left origin (px), targeting the application's active window.
+   */
+  async tap(target: TapTarget | { x: number; y: number } | string): Promise<void> {
+    const body = normaliseTapTarget(target);
     await this._request<void>({
       method: "POST",
       path: "/test/tap",
       body,
       capability: "tap",
       expect: "void",
+    });
+  }
+
+  /**
+   * Long-poll until `condition` matches or the server deadline elapses.
+   * On 408, throws `WaitTimeoutError`.
+   */
+  async wait(
+    condition: WaitCondition,
+    options?: { timeoutMs?: number },
+  ): Promise<WaitResult> {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
+    return this._request<WaitResult>({
+      method: "POST",
+      path: "/test/wait",
+      body: { condition, timeout_ms: timeoutMs },
+      capability: "wait",
+      expect: "json",
+      waitTimeoutMs: timeoutMs,
     });
   }
 
@@ -124,7 +163,10 @@ export class E2EClient {
       );
     }
 
-    if (res.status === 501 || res.status === 404) {
+    if (res.status === 408) {
+      throw new WaitTimeoutError(opts.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS);
+    }
+    if (res.status === 501) {
       throw new NotImplementedError(opts.capability, res.status);
     }
     if (res.status >= 400) {
@@ -140,6 +182,15 @@ export class E2EClient {
     if (opts.expect === "bytes") return (await res.bytes()) as T;
     return (await res.json()) as T;
   }
+}
+
+function normaliseTapTarget(
+  target: TapTarget | { x: number; y: number } | string,
+): TapTarget {
+  if (typeof target === "string") return { selector: target };
+  if ("selector" in target) return target;
+  if ("xy" in target) return target;
+  return { xy: { x: target.x, y: target.y } };
 }
 
 async function safeReadBody(res: Response): Promise<unknown> {

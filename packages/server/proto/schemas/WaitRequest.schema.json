@@ -1,0 +1,70 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "WaitCondition": {
+      "description": "Condition long-polled by `/test/wait`.\n\nTagged on `kind` so SDK consumers can narrow the union by discriminator.",
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "selector_visible"
+              ],
+              "type": "string"
+            },
+            "selector": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "selector"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "enum": [
+                "state_eq"
+              ],
+              "type": "string"
+            },
+            "property": {
+              "type": "string"
+            },
+            "selector": {
+              "type": "string"
+            },
+            "value": true
+          },
+          "required": [
+            "kind",
+            "property",
+            "selector",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    }
+  },
+  "description": "Body of `POST /test/wait`.",
+  "properties": {
+    "condition": {
+      "$ref": "#/definitions/WaitCondition"
+    },
+    "timeout_ms": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "condition",
+    "timeout_ms"
+  ],
+  "title": "WaitRequest",
+  "type": "object"
+}

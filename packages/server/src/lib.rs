@@ -7,15 +7,23 @@
 //! See `docs/seed.md` §6 Step 1 and `docs/adr/0001-architecture.md`.
 
 #[cfg(feature = "e2e")]
-mod http;
+pub mod http;
+#[cfg(feature = "e2e")]
+pub mod input;
+#[cfg(feature = "e2e")]
+pub mod main_thread;
 #[cfg(feature = "e2e")]
 mod port;
 #[cfg(feature = "e2e")]
-mod proto;
+pub mod proto;
 #[cfg(feature = "e2e")]
 mod registry;
 #[cfg(feature = "e2e")]
 mod schema_export;
+#[cfg(feature = "e2e")]
+pub mod tree;
+#[cfg(feature = "e2e")]
+pub mod wait;
 
 #[cfg(feature = "e2e")]
 pub use gtk4 as gtk;
@@ -39,6 +47,7 @@ mod start_impl {
     use std::time::Duration;
 
     use crate::http::{router, AppState};
+    use crate::main_thread::{install_app, spawn_receiver_loop, MainCmd};
     use crate::port::pick_free_listener;
     use crate::proto::{Capability, Info};
     use crate::registry::{delete_instance_file, runtime_dir, write_instance_file, InstanceFile};
@@ -79,11 +88,11 @@ mod start_impl {
     ///
     /// Boot-time failures (port exhaustion, registry write, runtime build)
     /// panic — `docs/seed.md` §10 explicitly permits panics on server boot.
-    pub fn start(_app: &crate::gtk::Application) -> Handle {
-        start_inner().expect("gtk4-e2e-server: boot failed")
+    pub fn start(app: &crate::gtk::Application) -> Handle {
+        start_inner(app).expect("gtk4-e2e-server: boot failed")
     }
 
-    fn start_inner() -> std::io::Result<Handle> {
+    fn start_inner(app: &crate::gtk::Application) -> std::io::Result<Handle> {
         let dir = runtime_dir()?;
         let (port, std_listener) = pick_free_listener()?;
         std_listener.set_nonblocking(true)?;
@@ -101,7 +110,7 @@ mod start_impl {
             port,
             app_name: app_name.clone(),
             app_version: app_version.clone(),
-            capabilities: vec![Capability::Info],
+            capabilities: vec![Capability::Info, Capability::Tap, Capability::Wait],
             token_required: token.as_ref().map(|_| true),
         });
 
@@ -121,8 +130,16 @@ mod start_impl {
             .thread_name("gtk4-e2e-rt")
             .build()?;
 
+        // Cross-runtime channel: tokio handlers → GLib main thread.
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(64);
+        install_app(app.clone());
+        spawn_receiver_loop(cmd_rx);
+
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-        let state = AppState { info: info.clone() };
+        let state = AppState {
+            info: info.clone(),
+            cmd_tx,
+        };
         let app_router = router(state);
 
         rt.spawn(async move {

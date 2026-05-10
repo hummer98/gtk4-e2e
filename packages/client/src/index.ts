@@ -6,5 +6,13 @@ export {
   E2EError,
   HttpError,
   NotImplementedError,
+  WaitTimeoutError,
 } from "./errors.ts";
-export type { Capability, Info } from "./types.gen.ts";
+export type {
+  Capability,
+  Info,
+  TapTarget,
+  WaitCondition,
+  WaitRequest,
+  WaitResult,
+} from "./types.gen.ts";
