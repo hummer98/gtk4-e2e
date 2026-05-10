@@ -203,6 +203,8 @@ Xvfb) to produce the mp4.
 
 - **CI 失敗時の確認方法**: GitHub Actions の `scenarios` job が visual regression で fail した場合、`__screenshots__/<name>.actual.png` と `__screenshots__/<name>.diff.png` が `visual-regression-diff` という artifact (retention 7 日) として upload されます。Actions ページの "Artifacts" から download して、ローカルの baseline (`<name>.png`) と並べて目視で diff を確認できます。
 - **baseline 追加 / 更新 PR は明示する**: `__screenshots__/*.png` (baseline) を新規追加 / 上書きする PR は、説明欄に「visual regression baseline の追加 / `updateBaseline: true` 経由の更新」である旨を記載してください。レビュアーが PNG diff を画像として確認するきっかけになります (テキスト diff では検出できないため)。
+- **demo scenarios の baseline 運用**: `packages/demo/scenarios/visual-regression.spec.ts` の baseline (`packages/demo/scenarios/__screenshots__/visual-regression.spec.ts-main-window.png`) は **repo に commit** してあり、CI (`scenarios` job; ubuntu-latest + xvfb 1280x720x24) と pixel-exact 一致を要求します。意図的に更新する場合は `bash packages/demo/scripts/gen-visual-baseline.sh` (Docker 必須) で再生成し、**baseline PNG の差分を含む明示的な PR** でレビューしてください。手元で auto-save された baseline をそのまま push しないこと (OS / backend 差で必ず CI が落ちます)。
+- **macOS dev 注意**: 上記 spec は `process.platform !== "linux"` で skip されます (macOS Quartz backend は Linux+xvfb と pixel 一致しないため)。手元での視覚 regression check が欲しい場合は CI の PR check を待つか、`gen-visual-baseline.sh` を Docker で叩いて `git diff` で差分を確認してください。
 
 ## Claude Code integration
 
