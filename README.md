@@ -24,7 +24,7 @@ Originally proposed inside the Brainship project (private), this framework was e
 
 ## Status
 
-**Bootstrap phase (Step 0–10 complete)**. See [`docs/REPORT.md`](docs/REPORT.md) for a single-file project status report (per-step completion, MVP gate, open questions, roadmap), [`docs/seed.md`](docs/seed.md) for the initial Claude Code scaffolding instructions, and [`docs/adr/`](docs/adr/) for architectural decisions.
+**Round 2 stabilization complete** (Step 0–15 + Step 9 a/b/c shipped). Per-round status reports live under [`docs/reports/`](docs/reports/) — see [`docs/reports/README.md`](docs/reports/README.md) for the index, [`docs/seed.md`](docs/seed.md) for the initial Claude Code scaffolding instructions, and [`docs/adr/`](docs/adr/) for architectural decisions.
 
 ## Quick start
 
