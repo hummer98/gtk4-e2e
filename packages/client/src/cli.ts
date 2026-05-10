@@ -38,7 +38,7 @@ Flags (apply to all subcommands):
   --app <name>    filter discover() to a specific app_name
   --token <t>     Authorization: Bearer <t> (env GTK4_E2E_TOKEN also honored)
   --output <path> recorder output file (record start)
-  --display <:N>  X11 display for record start (default: \$DISPLAY)
+  --display <:N>  X11 display for record start (default: $DISPLAY)
   --fps <n>       recorder framerate (default: 30)
   --verbose       inherit recorder stderr (record start)
   --help, -h      show this message
