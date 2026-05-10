@@ -613,8 +613,8 @@ async fn type_capability_in_info() {
     let cap_strs: Vec<&str> = caps.iter().filter_map(Value::as_str).collect();
     assert_eq!(
         cap_strs,
-        vec!["info", "tap", "wait", "screenshot", "events", "type"],
-        "capabilities order must include type at the tail"
+        vec!["info", "tap", "wait", "screenshot", "events", "type", "swipe"],
+        "capabilities order must include type and swipe at the tail"
     );
 }
 
