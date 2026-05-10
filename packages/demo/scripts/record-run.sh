@@ -40,8 +40,8 @@ mkdir -p "$ARTIFACT_DIR"
 # shellcheck disable=SC2329  # invoked via `trap cleanup EXIT` below
 cleanup() {
   # Best-effort: stop the recorder if still running (e.g. bun test failed).
-  if bunx gtk4-e2e record status >/dev/null 2>&1; then
-    bunx gtk4-e2e record stop >/dev/null 2>&1 || true
+  if bun packages/client/src/cli.ts record status >/dev/null 2>&1; then
+    bun packages/client/src/cli.ts record stop >/dev/null 2>&1 || true
   fi
 }
 trap cleanup EXIT
@@ -50,7 +50,7 @@ trap cleanup EXIT
 # `_setup.ts:spawnDemo` runs `cargo build`.
 cargo build -p gtk4-e2e-demo --features e2e
 
-bunx gtk4-e2e record start --output "$OUTPUT" --fps "$FPS"
+bun packages/client/src/cli.ts record start --output "$OUTPUT" --fps "$FPS"
 
 # `set +e` so we still hit `record stop` cleanly when bun test fails.
 set +e
@@ -58,7 +58,7 @@ bun test packages/demo/scenarios/
 TEST_EXIT=$?
 set -e
 
-bunx gtk4-e2e record stop
+bun packages/client/src/cli.ts record stop
 trap - EXIT
 
 if [ ! -s "$OUTPUT" ]; then

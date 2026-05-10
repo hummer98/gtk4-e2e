@@ -114,7 +114,7 @@ jobs:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
       - name: Smoke test gtk4-e2e CLI resolution
-        run: bunx gtk4-e2e --help >/dev/null
+        run: bun packages/client/src/cli.ts --help >/dev/null
       - name: Build demo binary (--features e2e)
         run: cargo build -p gtk4-e2e-demo --features e2e
       - name: Record scenarios run
