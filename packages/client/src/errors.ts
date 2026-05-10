@@ -52,6 +52,20 @@ export class WaitTimeoutError extends E2EError {
   }
 }
 
+// Local recorder failures (Step 8). Distinct from server-origin
+// `NotImplementedError` (HTTP 501) so the CLI can map them to a separate
+// exit code (6). `kind` lets callers distinguish e.g. ffmpeg-not-found vs
+// already-running vs Wayland-not-supported without string matching.
+export class RecorderError extends E2EError {
+  readonly kind?: string;
+
+  constructor(message: string, options?: { cause?: unknown; kind?: string }) {
+    super(message, options);
+    this.name = "RecorderError";
+    if (options?.kind) this.kind = options.kind;
+  }
+}
+
 // `WS /test/events` failures. Step 7 plan §5.4 / §10.2:
 //   * thrown from `await client.events(...)` when the initial open fails
 //     (host unreachable, capability missing, handshake rejected)
