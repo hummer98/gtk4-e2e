@@ -24,7 +24,7 @@ Originally proposed inside the Brainship project (private), this framework was e
 
 ## Status
 
-**Round 2 stabilization complete** (Step 0–15 + Step 9 a/b/c shipped). Per-round status reports live under [`docs/reports/`](docs/reports/) — see [`docs/reports/README.md`](docs/reports/README.md) for the index, [`docs/seed.md`](docs/seed.md) for the initial Claude Code scaffolding instructions, and [`docs/adr/`](docs/adr/) for architectural decisions.
+**Round 3 visual regression diff complete** (Step 0–21, including pixelmatch-based screenshot baseline workflow). Per-round status reports live under [`docs/reports/`](docs/reports/) — see [`docs/reports/README.md`](docs/reports/README.md) for the index, [`docs/seed.md`](docs/seed.md) for the initial Claude Code scaffolding instructions, and [`docs/adr/`](docs/adr/) for architectural decisions.
 
 ## Quick start
 

@@ -1,7 +1,7 @@
 
-# ADR-0003 (Draft): Visual regression diff — engine selection
+# ADR-0003: Visual regression diff — engine selection
 
-- **Status**: Proposed
+- **Status**: Accepted (2026-05-10, after T021–T025 implementation, see [`docs/reports/2026-05-10-round3-visual-regression.md`](../reports/2026-05-10-round3-visual-regression.md))
 - **Date**: 2026-05-10
 - **Confidence**: 中〜高 (75%) — Bun 単体ランタイム制約・ライセンス・Playwright 先行事例が一致して候補を絞っているため engine 選定そのものはほぼ確定的に書ける。確信度を 100% にしていないのは、(a) gtk4-e2e の screenshot サイズ実測値 (cargo demo の typical 出力 px 数) を CI で取っていないため pixelmatch の処理時間 budget が現物では未検証、(b) baseline storage / SDK API 名 / threshold default の 4 つの Open Questions が ready 化時に決定すべき項目として残るため。
 

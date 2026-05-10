@@ -6,6 +6,7 @@
 
 | 日付 | レポート | 対象 | 主な成果 |
 |------|---------|------|---------|
+| 2026-05-10 | [Round 3 — Visual Regression Diff](./2026-05-10-round3-visual-regression.md) | T020 (ADR), T021〜T025 (T020-A〜E) | ADR-0003 採用 (pixelmatch)、SDK `expectScreenshot`、CLI `screenshot --baseline`、baseline storage 規約、CI diff artifact、demo visual-regression scenario |
 | 2026-05-10 | [Round 2 — Stabilization](./2026-05-10-round2-stabilization.md) | T013〜T019 + T020 (draft) | type/swipe/pinch capability、`/test/elements`、`/test/state`、Biome+tsc CI 連携、record-demo CI 削除、T006 申し送り総括 |
 | 2026-05-10 | [Round 1 — Bootstrap](./2026-05-10-bootstrap.md) | T001〜T012 (Step 0〜11) | workspace + CI、in-process server、demo、codegen、TS SDK、tap/wait、snapshot、events/WS、recorder + Claude plugin、録画ラン、最終レポート |
 
