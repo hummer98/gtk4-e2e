@@ -41,9 +41,7 @@ describe.skipIf(!haveDisplay)("scenarios/tap-wait", () => {
       };
       // No tap, so the label stays at "waiting...". 500 ms is plenty for
       // multiple poll ticks but well below the 30 s test wrap.
-      await expect(client.wait(cond, { timeoutMs: 500 })).rejects.toBeInstanceOf(
-        WaitTimeoutError,
-      );
+      await expect(client.wait(cond, { timeoutMs: 500 })).rejects.toBeInstanceOf(WaitTimeoutError);
     } finally {
       await teardown();
     }

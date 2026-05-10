@@ -5,12 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  discover,
-  type InstanceFile,
-  listInstances,
-  runtimeDir,
-} from "../src/discover.ts";
+import { discover, type InstanceFile, listInstances, runtimeDir } from "../src/discover.ts";
 
 // Pid that is extremely unlikely to exist as a live process. `process.kill`
 // with sig 0 returns ESRCH for unused pids on macOS / Linux.

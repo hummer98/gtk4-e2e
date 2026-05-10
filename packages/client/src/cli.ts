@@ -94,8 +94,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       const v = argv[++i];
       if (v === undefined) throw new ArgvError("--pid requires a value");
       const n = Number.parseInt(v, 10);
-      if (!Number.isFinite(n) || n <= 0)
-        throw new ArgvError(`--pid: not a positive integer: ${v}`);
+      if (!Number.isFinite(n) || n <= 0) throw new ArgvError(`--pid: not a positive integer: ${v}`);
       result.flags.pid = n;
       continue;
     }
@@ -127,8 +126,7 @@ function parseArgs(argv: string[]): ParsedArgs {
       const v = argv[++i];
       if (v === undefined) throw new ArgvError("--fps requires a value");
       const n = Number.parseInt(v, 10);
-      if (!Number.isFinite(n) || n <= 0)
-        throw new ArgvError(`--fps: not a positive integer: ${v}`);
+      if (!Number.isFinite(n) || n <= 0) throw new ArgvError(`--fps: not a positive integer: ${v}`);
       result.flags.fps = n;
       continue;
     }
@@ -169,9 +167,7 @@ async function buildClient(parsed: ParsedArgs): Promise<E2EClient> {
     appName: parsed.flags.app,
   });
   if (matches.length === 0) {
-    throw new DiscoveryError(
-      "no gtk4-e2e instance found via local registry; try --port",
-    );
+    throw new DiscoveryError("no gtk4-e2e instance found via local registry; try --port");
   }
   const sorted = [...matches].sort((a, b) =>
     a.started_at < b.started_at ? 1 : a.started_at > b.started_at ? -1 : 0,
@@ -278,8 +274,7 @@ async function runRecord(parsed: ParsedArgs): Promise<number> {
   switch (action) {
     case "start": {
       const out = parsed.flags.output;
-      if (out === undefined)
-        throw new ArgvError("record start requires --output <path>");
+      if (out === undefined) throw new ArgvError("record start requires --output <path>");
       const r = buildRecorderFromEnv(parsed, out);
       await r.start();
       return 0;
@@ -298,9 +293,7 @@ async function runRecord(parsed: ParsedArgs): Promise<number> {
       return 0;
     }
     default:
-      throw new ArgvError(
-        `unknown record sub-action: ${action} (expected start | stop | status)`,
-      );
+      throw new ArgvError(`unknown record sub-action: ${action} (expected start | stop | status)`);
   }
 }
 

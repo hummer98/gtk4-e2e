@@ -69,13 +69,7 @@ export function buildFfmpegArgs(opts: {
 }): string[] {
   const env = opts.env ?? {};
   const display = opts.display ?? defaultDisplay(env);
-  const args = [
-    "-y",
-    "-f",
-    "x11grab",
-    "-framerate",
-    String(opts.fps ?? 30),
-  ];
+  const args = ["-y", "-f", "x11grab", "-framerate", String(opts.fps ?? 30)];
   if (opts.size) {
     args.push("-video_size", `${opts.size.w}x${opts.size.h}`);
   }
@@ -324,9 +318,7 @@ export class Recorder {
       };
     }
     const startedMs = Date.parse(parsed.started_at);
-    const elapsedMs = Number.isFinite(startedMs)
-      ? Math.max(0, Date.now() - startedMs)
-      : null;
+    const elapsedMs = Number.isFinite(startedMs) ? Math.max(0, Date.now() - startedMs) : null;
     return {
       running: true,
       output: parsed.output,

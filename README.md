@@ -68,6 +68,27 @@ The demo also prints the URL to stderr at startup:
 [gtk4-e2e-demo] server up on http://127.0.0.1:<port>/test/info
 ```
 
+### Lint / Format / Type-check (TS side)
+
+```bash
+bun install                                  # devDeps (biome, typescript)
+bun run lint                                 # biome lint  → packages/client 配下
+bun run fmt:check                            # biome format (差分があれば fail)
+(cd packages/client && bunx tsc --noEmit)    # 型チェック (要 types.gen.ts 生成)
+```
+
+整形を当てるにはリポジトリ root で:
+
+```bash
+bunx biome format --write .
+bunx biome lint --write .
+```
+
+`types.gen.ts` は gitignored なので、ローカルで `tsc --noEmit` を初めて走らせるときは
+先に `bun packages/client/scripts/gen-types.ts` で生成しておく
+(Rust toolchain 不要、committed JSON Schema から生成される)。
+CI は同じ手順を `tsc --noEmit` の前段に組み込み済み。
+
 ## Recording (MVP: X11)
 
 Local screen recording is driven by `ffmpeg` and tracked via a single PID

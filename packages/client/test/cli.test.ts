@@ -65,8 +65,10 @@ function startMock(handlers: RouteHandlers): MockServer {
     },
   });
 
+  // Bun.serve(...).port is `number | undefined` for UDS support; we always
+  // bind a TCP port (port: 0), so it is guaranteed non-null at runtime.
   return {
-    port: server.port,
+    port: server.port!,
     receivedAuth,
     receivedBodies,
     async stop() {
@@ -115,13 +117,7 @@ describe("cli info", () => {
   test("forwards --token as Authorization: Bearer", async () => {
     mock = startMock({ info: () => Response.json(sampleInfo) });
 
-    const result = await runCli([
-      "info",
-      "--port",
-      String(mock.port),
-      "--token",
-      "foo",
-    ]);
+    const result = await runCli(["info", "--port", String(mock.port), "--token", "foo"]);
     expect(result.exitCode).toBe(0);
     expect(mock.receivedAuth.at(-1)).toBe("Bearer foo");
   });
@@ -160,12 +156,7 @@ describe("cli tap", () => {
       tap: () => new Response(null, { status: 204 }),
     });
 
-    const result = await runCli([
-      "tap",
-      "100,200",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["tap", "100,200", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(0);
     expect(mock.receivedBodies.at(-1)?.body).toEqual({ xy: { x: 100, y: 200 } });
   });
@@ -175,12 +166,7 @@ describe("cli tap", () => {
       tap: () => new Response(null, { status: 204 }),
     });
 
-    const result = await runCli([
-      "tap",
-      "#submit",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["tap", "#submit", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(0);
     expect(mock.receivedBodies.at(-1)?.body).toEqual({ selector: "#submit" });
   });
@@ -197,12 +183,7 @@ describe("cli tap", () => {
         }),
     });
 
-    const result = await runCli([
-      "tap",
-      "#submit",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["tap", "#submit", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(5);
   });
 
@@ -215,12 +196,7 @@ describe("cli tap", () => {
         }),
     });
 
-    const result = await runCli([
-      "tap",
-      "#submit",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["tap", "#submit", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(3);
   });
 });
@@ -237,13 +213,7 @@ describe("cli type", () => {
       type: () => new Response(null, { status: 200 }),
     });
 
-    const result = await runCli([
-      "type",
-      "#input1",
-      "hello",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["type", "#input1", "hello", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(0);
     expect(mock.receivedBodies.at(-1)?.body).toEqual({
       selector: "#input1",
@@ -256,12 +226,7 @@ describe("cli type", () => {
       type: () => new Response(null, { status: 200 }),
     });
 
-    const result = await runCli([
-      "type",
-      "#input1",
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["type", "#input1", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr.length).toBeGreaterThan(0);
   });
@@ -362,12 +327,7 @@ describe("cli screenshot", () => {
     });
 
     const out = join(scratch, "out.png");
-    const result = await runCli([
-      "screenshot",
-      out,
-      "--port",
-      String(mock.port),
-    ]);
+    const result = await runCli(["screenshot", out, "--port", String(mock.port)]);
     expect(result.exitCode).toBe(0);
     const bytes = await Bun.file(out).bytes();
     expect(bytes[0]).toBe(0x89);

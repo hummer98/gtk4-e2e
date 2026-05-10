@@ -5,11 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  buildFfmpegArgs,
-  detectDisplayKind,
-  Recorder,
-} from "../src/recorder.ts";
+import { buildFfmpegArgs, detectDisplayKind, Recorder } from "../src/recorder.ts";
 import { E2EError, RecorderError } from "../src/errors.ts";
 
 describe("buildFfmpegArgs", () => {
@@ -87,9 +83,7 @@ describe("detectDisplayKind", () => {
   });
 
   test("WAYLAND wins over DISPLAY (Xwayland scenario)", () => {
-    expect(
-      detectDisplayKind({ WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" }),
-    ).toBe("wayland");
+    expect(detectDisplayKind({ WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0" })).toBe("wayland");
   });
 
   test("neither → unknown", () => {
@@ -97,9 +91,7 @@ describe("detectDisplayKind", () => {
   });
 
   test("empty string treated as absent", () => {
-    expect(detectDisplayKind({ DISPLAY: "", WAYLAND_DISPLAY: "" })).toBe(
-      "unknown",
-    );
+    expect(detectDisplayKind({ DISPLAY: "", WAYLAND_DISPLAY: "" })).toBe("unknown");
   });
 });
 

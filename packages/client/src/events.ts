@@ -43,8 +43,7 @@ export interface EventsOptions {
   urlBuilder?: () => URL;
 }
 
-export type EventStream = AsyncIterable<EventEnvelope> &
-  AsyncIterator<EventEnvelope>;
+export type EventStream = AsyncIterable<EventEnvelope> & AsyncIterator<EventEnvelope>;
 
 const DEFAULT_RECONNECT: ResolvedReconnectConfig = {
   baseMs: 100,
@@ -202,9 +201,7 @@ class EventStreamImpl implements AsyncIterable<EventEnvelope>, AsyncIterator<Eve
     while (!this.done && !this.signal?.aborted) {
       if (this.retries >= this.cfg.maxRetries) {
         this.endWithError(
-          new EventStreamError(
-            `event stream lost connection after ${this.retries} retries`,
-          ),
+          new EventStreamError(`event stream lost connection after ${this.retries} retries`),
         );
         return;
       }
@@ -238,7 +235,7 @@ class EventStreamImpl implements AsyncIterable<EventEnvelope>, AsyncIterator<Eve
   }
 
   private computeBackoff(attempt: number): number {
-    const exp = Math.min(this.cfg.maxMs, this.cfg.baseMs * Math.pow(this.cfg.factor, attempt));
+    const exp = Math.min(this.cfg.maxMs, this.cfg.baseMs * this.cfg.factor ** attempt);
     return Math.random() * exp;
   }
 

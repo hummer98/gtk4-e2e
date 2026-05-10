@@ -124,9 +124,7 @@ export async function generate(): Promise<string> {
     .sort();
 
   if (entries.length === 0) {
-    throw new Error(
-      `no *.schema.json found in ${SCHEMAS_DIR}; run gen-schemas first`,
-    );
+    throw new Error(`no *.schema.json found in ${SCHEMAS_DIR}; run gen-schemas first`);
   }
 
   const seen = new Set<string>();

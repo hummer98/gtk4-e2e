@@ -44,6 +44,7 @@ jobs:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
       - run: bun run lint
+      - run: bun run fmt:check
       - name: TS codegen smoke (JSON Schema → types.gen.ts)
         run: |
           # JSON Schemas are committed; this job has no rust toolchain, so we
@@ -52,6 +53,9 @@ jobs:
           bun packages/client/scripts/gen-types.ts
           grep -q "export interface Info" packages/client/src/types.gen.ts
           grep -q "Capability" packages/client/src/types.gen.ts
+      - name: tsc --noEmit (packages/client)
+        working-directory: packages/client
+        run: bunx tsc --noEmit
       - run: bun test --pass-with-no-tests
 
   scenarios:

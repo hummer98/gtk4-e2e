@@ -4,14 +4,19 @@
   "private": true,
   "type": "module",
   "description": "TS SDK + CLI for the gtk4-e2e in-process server.",
-  "bin": { "gtk4-e2e": "./src/cli.ts" },
+  "bin": {
+    "gtk4-e2e": "./src/cli.ts"
+  },
   "main": "./src/index.ts",
   "exports": {
-    ".": { "import": "./src/index.ts", "types": "./src/index.ts" }
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts"
+    }
   },
   "scripts": {
-    "lint": "exit 0",
-    "fmt:check": "exit 0",
+    "lint": "biome lint .",
+    "fmt:check": "biome format .",
     "test": "bun test",
     "gen:types": "cargo run -p gtk4-e2e-server --example gen-schemas --features e2e && bun scripts/gen-types.ts"
   },

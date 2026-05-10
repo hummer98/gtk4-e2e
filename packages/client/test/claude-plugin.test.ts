@@ -26,10 +26,7 @@ function parseFrontmatter(text: string): Frontmatter | null {
     const m = line.match(/^([A-Za-z_-]+):\s*(.*)$/);
     if (!m) continue;
     let v = m[2].trim();
-    if (
-      (v.startsWith('"') && v.endsWith('"')) ||
-      (v.startsWith("'") && v.endsWith("'"))
-    ) {
+    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
       v = v.slice(1, -1);
     }
     fields[m[1]] = v;

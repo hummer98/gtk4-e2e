@@ -3,11 +3,17 @@
   "private": true,
   "version": "0.0.0",
   "packageManager": "bun@1.3.13",
-  "workspaces": ["packages/client"],
+  "workspaces": [
+    "packages/client"
+  ],
   "scripts": {
     "lint": "bun run --filter '*' lint",
     "fmt:check": "bun run --filter '*' fmt:check",
     "test": "bun test --pass-with-no-tests",
     "gen:types": "bun run --filter 'gtk4-e2e' gen:types"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.15",
+    "typescript": "6.0.3"
   }
 }

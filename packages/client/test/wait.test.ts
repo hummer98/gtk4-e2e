@@ -100,9 +100,7 @@ describe("E2EClient.wait", () => {
     });
     const client = new E2EClient({ baseUrl: mock.baseUrl });
     const cond: WaitCondition = { kind: "selector_visible", selector: "#never" };
-    await expect(client.wait(cond, { timeoutMs: 250 })).rejects.toBeInstanceOf(
-      WaitTimeoutError,
-    );
+    await expect(client.wait(cond, { timeoutMs: 250 })).rejects.toBeInstanceOf(WaitTimeoutError);
   });
 
   test("uses 5s default timeout when not specified", async () => {

@@ -1,6 +1,6 @@
 import "./_setup.ts";
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import type { ServerWebSocket } from "bun";
 
 import { EventStreamError } from "../src/errors.ts";
@@ -45,9 +45,12 @@ function startMockWsServer(
       },
     },
   });
+  // Bun.serve(...).port is `number | undefined` for UDS support; we always
+  // bind a TCP port (port: 0), so it is guaranteed non-null at runtime.
+  const port = server.port!;
   return {
-    port: server.port,
-    url: () => new URL(`ws://127.0.0.1:${server.port}/test/events`),
+    port,
+    url: () => new URL(`ws://127.0.0.1:${port}/test/events`),
     broadcast: (env) => {
       const json = JSON.stringify(env);
       for (const ws of sockets) ws.send(json);

@@ -18,18 +18,8 @@ import {
   NotImplementedError,
   WaitTimeoutError,
 } from "./errors.ts";
-import {
-  openEventStream,
-  type EventStream,
-  type EventsOptions,
-} from "./events.ts";
-import type {
-  Info,
-  TapTarget,
-  TypeRequest,
-  WaitCondition,
-  WaitResult,
-} from "./types.gen.ts";
+import { openEventStream, type EventStream, type EventsOptions } from "./events.ts";
+import type { Info, TapTarget, TypeRequest, WaitCondition, WaitResult } from "./types.gen.ts";
 
 interface ClientOptions {
   baseUrl: string;
@@ -73,9 +63,7 @@ export class E2EClient {
   static async connect(filter: DiscoverFilter = {}): Promise<E2EClient> {
     const matches = await discover(filter);
     if (matches.length === 0) {
-      throw new DiscoveryError(
-        "no gtk4-e2e instance matched the given filter",
-      );
+      throw new DiscoveryError("no gtk4-e2e instance matched the given filter");
     }
     // Multiple hits: pick the most recently started. RFC3339 strings sort
     // lexicographically as long as the offset is consistent (the server emits
@@ -158,10 +146,7 @@ export class E2EClient {
    * Long-poll until `condition` matches or the server deadline elapses.
    * On 408, throws `WaitTimeoutError`.
    */
-  async wait(
-    condition: WaitCondition,
-    options?: { timeoutMs?: number },
-  ): Promise<WaitResult> {
+  async wait(condition: WaitCondition, options?: { timeoutMs?: number }): Promise<WaitResult> {
     const timeoutMs = options?.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
     return this._request<WaitResult>({
       method: "POST",
@@ -215,10 +200,7 @@ export class E2EClient {
     try {
       res = await fetch(`${this.baseUrl}${opts.path}`, init);
     } catch (err) {
-      throw new E2EError(
-        `network error contacting ${this.baseUrl}${opts.path}`,
-        { cause: err },
-      );
+      throw new E2EError(`network error contacting ${this.baseUrl}${opts.path}`, { cause: err });
     }
 
     if (res.status === 408) {
@@ -229,11 +211,7 @@ export class E2EClient {
     }
     if (res.status >= 400) {
       const body = await safeReadBody(res);
-      throw new HttpError(
-        res.status,
-        body,
-        `HTTP ${res.status} from ${opts.method} ${opts.path}`,
-      );
+      throw new HttpError(res.status, body, `HTTP ${res.status} from ${opts.method} ${opts.path}`);
     }
 
     if (opts.expect === "void") return undefined as T;
@@ -242,9 +220,7 @@ export class E2EClient {
   }
 }
 
-function normaliseTapTarget(
-  target: TapTarget | { x: number; y: number } | string,
-): TapTarget {
+function normaliseTapTarget(target: TapTarget | { x: number; y: number } | string): TapTarget {
   if (typeof target === "string") return { selector: target };
   if ("selector" in target) return target;
   if ("xy" in target) return target;

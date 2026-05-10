@@ -135,8 +135,8 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 
 ### 周辺整備の未完
 
-- **Biome 未導入**: ルートに `biome.json` を入れて `bun run lint` / `fmt:check` を実体化する別タスク (T005 申し送り)。現状は `exit 0` の placeholder。
-- **`tsc --noEmit` を CI に未連携**: 既存 2 件の TS error (`cli.test.ts:65` / `events.test.ts:49` の `TS2322`) が baseline (`e97dd01` 以降) として残っている。CI 連携と併せて別タスク。
+- ~~**Biome 未導入**~~ → **完了 (T017)**: ルートに `biome.json` を追加、`packages/client/package.json` の `lint` / `fmt:check` を biome 実体化、CI bun job で `bun run lint` / `bun run fmt:check` を実行。
+- ~~**`tsc --noEmit` を CI に未連携**~~ → **完了 (T017)**: TS2322 baseline 2 件 (`cli.test.ts:67` / `events.test.ts:49` の `Bun.serve(...).port` narrowing) を非 null assertion で解消、CI bun job に `tsc --noEmit (packages/client)` step を追加。
 - **`InstanceFile` の SSOT 化**: registry file format `InstanceFile` は現在 SDK 側 (TS) と server 側 (Rust) で別個に書かれている (ADR-0002 Open Question)。
 - **`packages/server/src/cli.ts` の executable bit 変更** (T006): Conductor 判断保留のまま `100755` 状態。
 - **手動検証 skip 項目**: T003 の window close → registry cleanup、T009 の Claude Code 上 plugin install、T011 の Linux X11 golden path は CI / display 持ちレビュアーに委譲。
@@ -176,8 +176,6 @@ screenshot は PNG 保存のみ。pixel diff / SSIM などの diff engine は未
 ### 短期 (consumer 接続を見据えた整備)
 
 - **Brainship 等の consumer への接続**: `gtk4-e2e-server` を consumer の `Cargo.toml` に `gtk4-e2e-server = { git = "...", features = ["e2e"] }` として追加 (debug build 時のみ)。consumer 側は `dev.foo.MyApp.start()` の中で `gtk4_e2e_server::start(&app)` を呼び、`Handle` を `Rc<RefCell<Option<Handle>>>` に root 保持する (T003 demo パターン参照)。scenario は別 repo / 別 directory に bun project として作る。
-- **`tsc --noEmit` の baseline 解消 + CI 連携** (T005 申し送り)。
-- **Biome 導入** (T005 申し送り): `bun run lint` / `fmt:check` を実体化。
 - **ADR-0002 を `Accepted` 昇格** + ADR README に運用ルール追記。
 - **`plugin.json` filename** に合わせて `seed.md §5` の `manifest.json` 記述を更新 (T009 申し送り)。
 
