@@ -28,6 +28,11 @@ import type {
   WaitCondition,
   WaitResult,
 } from "./types.gen.ts";
+import {
+  type ExpectScreenshotOptions,
+  expectScreenshot,
+  type VisualDiffResult,
+} from "./visualDiff.ts";
 
 interface ClientOptions {
   baseUrl: string;
@@ -251,6 +256,15 @@ export class E2EClient {
     if (path === undefined) return bytes;
     await Bun.write(path, bytes);
     return path;
+  }
+
+  /**
+   * Capture a screenshot and compare against a baseline PNG. Convenience
+   * wrapper around `screenshot()` + `expectScreenshot()` (plan §Q2 / §Q5).
+   */
+  async expectScreenshot(name: string, opts?: ExpectScreenshotOptions): Promise<VisualDiffResult> {
+    const actual = await this.screenshot();
+    return expectScreenshot(actual, name, opts);
   }
 
   private async _request<T>(opts: RequestOptions): Promise<T> {

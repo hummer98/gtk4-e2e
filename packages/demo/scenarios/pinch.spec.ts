@@ -16,10 +16,7 @@ async function waitForZoom(client: Awaited<ReturnType<typeof spawnDemo>>["client
   // is 0×0 until the toplevel is mapped, and `pinch` would otherwise fail
   // with out_of_bounds even on legal coordinates. Same trick as
   // swipe.spec.ts's `waitForScroll`.
-  await client.wait(
-    { kind: "selector_visible", selector: "#zoom1" },
-    { timeoutMs: 3000 },
-  );
+  await client.wait({ kind: "selector_visible", selector: "#zoom1" }, { timeoutMs: 3000 });
   await new Promise((res) => setTimeout(res, 200));
 }
 

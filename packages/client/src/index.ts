@@ -8,6 +8,7 @@ export {
   HttpError,
   NotImplementedError,
   RecorderError,
+  VisualDiffError,
   WaitTimeoutError,
 } from "./errors.ts";
 export type { EventStream, EventsOptions } from "./events.ts";
@@ -31,3 +32,5 @@ export type {
   WaitRequest,
   WaitResult,
 } from "./types.gen.ts";
+export type { ExpectScreenshotOptions, VisualDiffResult } from "./visualDiff.ts";
+export { expectScreenshot } from "./visualDiff.ts";

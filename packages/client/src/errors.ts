@@ -66,6 +66,25 @@ export class RecorderError extends E2EError {
   }
 }
 
+// Visual regression failures (Step 17 / T020-A). `kind` lets callers
+// distinguish "baseline_missing" (a precondition error — caller may want to
+// regenerate baselines) from "decode_failed" (the supplied bytes weren't a
+// readable PNG) without string-matching the message. Threshold violations
+// surface as `VisualDiffResult.match === false`, not as throws.
+export class VisualDiffError extends E2EError {
+  readonly kind: "baseline_missing" | "decode_failed";
+
+  constructor(
+    message: string,
+    kind: "baseline_missing" | "decode_failed",
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "VisualDiffError";
+    this.kind = kind;
+  }
+}
+
 // `WS /test/events` failures. Step 7 plan §5.4 / §10.2:
 //   * thrown from `await client.events(...)` when the initial open fails
 //     (host unreachable, capability missing, handshake rejected)

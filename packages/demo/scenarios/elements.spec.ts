@@ -4,10 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 
-import type {
-  ElementInfo,
-  WaitCondition,
-} from "../../client/src/types.gen.ts";
+import type { ElementInfo, WaitCondition } from "../../client/src/types.gen.ts";
 
 import { hasDisplay, spawnDemo } from "./_setup.ts";
 

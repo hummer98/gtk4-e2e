@@ -21,7 +21,12 @@
     "gen:types": "cargo run -p gtk4-e2e-server --example gen-schemas --features e2e && bun scripts/gen-types.ts"
   },
   "devDependencies": {
-    "json-schema-to-typescript": "^15",
-    "@types/bun": "^1"
+    "@types/bun": "^1",
+    "@types/pngjs": "^6",
+    "json-schema-to-typescript": "^15"
+  },
+  "dependencies": {
+    "pixelmatch": "^7",
+    "pngjs": "^7"
   }
 }
