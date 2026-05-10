@@ -24,7 +24,7 @@ Originally proposed inside the Brainship project (private), this framework was e
 
 ## Status
 
-**Bootstrap phase**. See [`docs/seed.md`](docs/seed.md) for the initial Claude Code instructions used to scaffold the project, and [`docs/adr/`](docs/adr/) for architectural decisions.
+**Bootstrap phase (Step 0–10 complete)**. See [`docs/REPORT.md`](docs/REPORT.md) for a single-file project status report (per-step completion, MVP gate, open questions, roadmap), [`docs/seed.md`](docs/seed.md) for the initial Claude Code scaffolding instructions, and [`docs/adr/`](docs/adr/) for architectural decisions.
 
 ## Quick start
 
