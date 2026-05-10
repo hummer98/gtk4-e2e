@@ -28,6 +28,7 @@ Subcommands:
   info                              GET /test/info → JSON to stdout
   tap <selector|x,y>                POST /test/tap
   type <selector> <text>            POST /test/type
+  swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   screenshot <out.png>              GET /test/screenshot → save to file
   record start --output <path>      start ffmpeg recording (X11 only in MVP)
   record stop                       stop the running recorder
@@ -41,6 +42,7 @@ Flags (apply to all subcommands):
   --output <path> recorder output file (record start)
   --display <:N>  X11 display for record start (default: $DISPLAY)
   --fps <n>       recorder framerate (default: 30)
+  --duration <ms> swipe gesture duration in ms (default: 300)
   --verbose       inherit recorder stderr (record start)
   --help, -h      show this message
 `;
@@ -56,6 +58,7 @@ interface ParsedArgs {
     output?: string;
     display?: string;
     fps?: number;
+    duration?: number;
     verbose: boolean;
     help: boolean;
   };
@@ -127,6 +130,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!Number.isFinite(n) || n <= 0)
         throw new ArgvError(`--fps: not a positive integer: ${v}`);
       result.flags.fps = n;
+      continue;
+    }
+    if (a === "--duration") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--duration requires a value");
+      const n = Number.parseInt(v, 10);
+      if (!Number.isFinite(n) || n <= 0)
+        throw new ArgvError(`--duration: not a positive integer: ${v}`);
+      result.flags.duration = n;
       continue;
     }
     if (a.startsWith("--")) {
@@ -201,6 +213,25 @@ async function runType(parsed: ParsedArgs): Promise<void> {
   const [selector, text] = parsed.positional;
   const client = await buildClient(parsed);
   await client.type(selector, text);
+}
+
+function parseSwipeXY(arg: string): { x: number; y: number } {
+  if (!/^\d+,\d+$/.test(arg)) {
+    throw new ArgvError(`swipe: expected non-negative "x,y", got: ${arg}`);
+  }
+  const [x, y] = arg.split(",").map((s) => Number.parseInt(s, 10));
+  return { x, y };
+}
+
+async function runSwipe(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 2) {
+    throw new ArgvError("swipe requires <x1,y1> <x2,y2>");
+  }
+  const from = parseSwipeXY(parsed.positional[0]);
+  const to = parseSwipeXY(parsed.positional[1]);
+  const durationMs = parsed.flags.duration ?? 300;
+  const client = await buildClient(parsed);
+  await client.swipe(from, to, durationMs);
 }
 
 async function runScreenshot(parsed: ParsedArgs): Promise<void> {
@@ -305,6 +336,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "type":
         await runType(parsed);
+        return 0;
+      case "swipe":
+        await runSwipe(parsed);
         return 0;
       case "screenshot":
         await runScreenshot(parsed);

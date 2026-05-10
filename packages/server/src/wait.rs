@@ -14,9 +14,9 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
-use crate::input::{resolve_xy, tap_widget, type_text, TapError, TypeError};
+use crate::input::{resolve_xy, tap_widget, type_text, SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
-use crate::proto::{TapTarget, TypeRequest, WaitCondition, WaitResult};
+use crate::proto::{TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
 use crate::tree::{find_first, parse_selector, GtkTree, WidgetTree};
 
 /// Polling interval (plan §Q7: fixed 100 ms internal).
@@ -131,7 +131,7 @@ pub(crate) fn dispatch_tap(
     }
 }
 
-/// GTK-bound entry point for `MainCmd::Type` (Step 9).
+/// GTK-bound entry point for `MainCmd::Type` (Step 9, T013).
 ///
 /// Mirrors `dispatch_tap` for the selector path: parse selector, resolve via
 /// `GtkTree`, then run the visibility / sensitivity / kind checks inside
@@ -154,6 +154,41 @@ pub(crate) fn dispatch_type(
         selector: req.selector.clone(),
     })?;
     type_text(&widget, &req.text, Some(&req.selector))
+}
+
+/// GTK-bound entry point for `MainCmd::Swipe`. Plan T014 §5.4: validates
+/// inputs, then either replies with the validation error synchronously or
+/// schedules the animation and replies with `Ok(())` from the timer's final
+/// frame.
+pub(crate) fn dispatch_swipe(
+    app: &crate::gtk::Application,
+    from: XY,
+    to: XY,
+    duration_ms: u64,
+    reply: tokio::sync::oneshot::Sender<Result<(), SwipeError>>,
+) {
+    let window = match app
+        .active_window()
+        .and_then(|w| w.downcast::<crate::gtk::ApplicationWindow>().ok())
+    {
+        Some(w) => w,
+        None => {
+            let _ = reply.send(Err(SwipeError::NoActiveWindow));
+            return;
+        }
+    };
+
+    let anim = match crate::input::validate(&window, from, to, duration_ms) {
+        Ok(anim) => anim,
+        Err(e) => {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    };
+
+    anim.run(move || {
+        let _ = reply.send(Ok(()));
+    });
 }
 
 pub(crate) fn eval_condition_in_app(

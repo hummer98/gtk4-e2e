@@ -1,0 +1,45 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "XY": {
+      "description": "Window-local pixel coordinates (top-left origin).",
+      "properties": {
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Body of `POST /test/swipe`.\n\n`from` / `to` are window-local pixel coordinates (top-left origin) of the active window. `duration_ms = 0` is rejected with HTTP 422 (see `SwipeError::ZeroDuration`); the upper bound is 10 000 ms.",
+  "properties": {
+    "duration_ms": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "from": {
+      "$ref": "#/definitions/XY"
+    },
+    "to": {
+      "$ref": "#/definitions/XY"
+    }
+  },
+  "required": [
+    "duration_ms",
+    "from",
+    "to"
+  ],
+  "title": "SwipeRequest",
+  "type": "object"
+}

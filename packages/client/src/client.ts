@@ -131,6 +131,30 @@ export class E2EClient {
   }
 
   /**
+   * Synthesize a swipe gesture from `from` to `to` over `durationMs`. Both
+   * endpoints are window-local pixel coords (top-left origin). The request
+   * resolves once the animation completes server-side.
+   *
+   * Errors:
+   *   - 404 no_scrollable_at_point  — `from` is not inside a ScrolledWindow
+   *   - 422 out_of_bounds / invalid_duration / no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async swipe(
+    from: { x: number; y: number },
+    to: { x: number; y: number },
+    durationMs: number,
+  ): Promise<void> {
+    await this._request<void>({
+      method: "POST",
+      path: "/test/swipe",
+      body: { from, to, duration_ms: durationMs },
+      capability: "swipe",
+      expect: "void",
+    });
+  }
+
+  /**
    * Long-poll until `condition` matches or the server deadline elapses.
    * On 408, throws `WaitTimeoutError`.
    */

@@ -136,6 +136,7 @@ mod start_impl {
                 Capability::Screenshot,
                 Capability::Events,
                 Capability::Type,
+                Capability::Swipe,
             ],
             token_required: token.as_ref().map(|_| true),
         });

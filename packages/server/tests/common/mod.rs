@@ -127,3 +127,20 @@ pub fn pump_glib(max_iters: usize) {
         }
     }
 }
+
+/// Pump the GLib main loop for at least `duration` of wall-clock time. Used to
+/// wait for `glib::timeout_add_local`-scheduled work to fire (real timers do
+/// not advance with `ctx.iteration(false)` alone).
+pub fn pump_glib_for(duration: std::time::Duration) {
+    let ctx = gtk::glib::MainContext::default();
+    let deadline = std::time::Instant::now() + duration;
+    while std::time::Instant::now() < deadline {
+        ctx.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(8));
+    }
+    for _ in 0..32 {
+        if !ctx.iteration(false) {
+            break;
+        }
+    }
+}

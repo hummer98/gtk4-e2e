@@ -23,7 +23,7 @@ pub struct Info {
 /// Variants are appended in the order in which they are surfaced. Step 6
 /// extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`.
 /// Step 7 appends `Events` for the `WS /test/events` channel.
-/// Step 9 appends `Type` for the `POST /test/type` capability.
+/// Step 9 appends `Type` (T013) for `POST /test/type` and `Swipe` (T014) for `POST /test/swipe`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -33,6 +33,7 @@ pub enum Capability {
     Screenshot,
     Events,
     Type,
+    Swipe,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -71,6 +72,18 @@ pub struct TypeRequest {
 pub struct WaitRequest {
     pub condition: WaitCondition,
     pub timeout_ms: u64,
+}
+
+/// Body of `POST /test/swipe`.
+///
+/// `from` / `to` are window-local pixel coordinates (top-left origin) of the
+/// active window. `duration_ms = 0` is rejected with HTTP 422 (see
+/// `SwipeError::ZeroDuration`); the upper bound is 10 000 ms.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct SwipeRequest {
+    pub from: XY,
+    pub to: XY,
+    pub duration_ms: u64,
 }
 
 /// Condition long-polled by `/test/wait`.

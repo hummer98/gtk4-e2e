@@ -21,8 +21,8 @@ use crate::gtk::glib;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
-use crate::input::{TapError, TypeError};
-use crate::proto::{TapTarget, TypeRequest, WaitCondition};
+use crate::input::{SwipeError, TapError, TypeError};
+use crate::proto::{TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
@@ -68,10 +68,17 @@ pub enum MainCmd {
     Screenshot {
         reply: oneshot::Sender<Result<Vec<u8>, ScreenshotError>>,
     },
-    /// Insert text into a widget (Step 9).
+    /// Insert text into a widget (Step 9, T013).
     Type {
         request: TypeRequest,
         reply: oneshot::Sender<Result<(), TypeError>>,
+    },
+    /// Synthesize a swipe over `duration_ms` (T014, plan §5.4).
+    Swipe {
+        from: XY,
+        to: XY,
+        duration_ms: u64,
+        reply: oneshot::Sender<Result<(), SwipeError>>,
     },
 }
 
@@ -139,6 +146,24 @@ fn handle_cmd(cmd: MainCmd) {
             let outcome = with_app(|app| crate::wait::dispatch_type(app, &request))
                 .unwrap_or(Err(TypeError::NoActiveWindow));
             let _ = reply.send(outcome);
+        }
+        MainCmd::Swipe {
+            from,
+            to,
+            duration_ms,
+            reply,
+        } => {
+            // Plan T014 §5.4: APP.with directly so the `Some/None` arms can
+            // each consume `reply` without borrow-checker contortions inside
+            // a `with_app` closure.
+            APP.with(|slot| match slot.borrow().as_ref() {
+                Some(app) => {
+                    crate::wait::dispatch_swipe(app, from, to, duration_ms, reply);
+                }
+                None => {
+                    let _ = reply.send(Err(SwipeError::NoActiveWindow));
+                }
+            });
         }
     }
 }

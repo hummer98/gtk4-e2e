@@ -34,6 +34,7 @@ interface RouteHandlers {
   tap?: (body: unknown) => Response | Promise<Response>;
   type?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
+  swipe?: (body: unknown) => Response | Promise<Response>;
 }
 
 function startMock(handlers: RouteHandlers): MockServer {
@@ -60,6 +61,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
+      if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       return new Response("not found", { status: 404 });
     },
   });
@@ -271,6 +273,73 @@ describe("E2EClient.type", () => {
       capability: "type",
       status: 501,
     });
+  });
+});
+
+describe("E2EClient.swipe", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends from / to / duration_ms POST body", async () => {
+    mock = startMock({
+      swipe: () => new Response(null, { status: 200 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.swipe({ x: 1, y: 2 }, { x: 3, y: 4 }, 200);
+
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.method).toBe("POST");
+    expect(last?.path).toBe("/test/swipe");
+    expect(last?.body).toEqual({
+      from: { x: 1, y: 2 },
+      to: { x: 3, y: 4 },
+      duration_ms: 200,
+    });
+  });
+
+  test("throws HttpError on 404 no_scrollable_at_point", async () => {
+    mock = startMock({
+      swipe: () =>
+        new Response(
+          JSON.stringify({ error: "no_scrollable_at_point", x: 1, y: 2 }),
+          {
+            status: 404,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.swipe({ x: 1, y: 2 }, { x: 1, y: 50 }, 100);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(404);
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      swipe: () =>
+        new Response(
+          JSON.stringify({ error: "not_implemented", capability: "swipe" }),
+          {
+            status: 501,
+            headers: { "content-type": "application/json" },
+          },
+        ),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await expect(
+      client.swipe({ x: 1, y: 2 }, { x: 3, y: 4 }, 100),
+    ).rejects.toBeInstanceOf(NotImplementedError);
   });
 });
 

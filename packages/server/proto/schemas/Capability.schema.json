@@ -1,14 +1,15 @@
 {
   "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Capability identifiers advertised in `Info.capabilities`.\n\nVariants are appended in the order in which they are surfaced. Step 6 extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`. Step 7 appends `Events` for the `WS /test/events` channel. Step 9 appends `Type` for the `POST /test/type` capability.",
+  "description": "Capability identifiers advertised in `Info.capabilities`.\n\nVariants are appended in the order in which they are surfaced. Step 6 extends the deterministic ordering to `[Info, Tap, Wait, Screenshot]`. Step 7 appends `Events` for the `WS /test/events` channel. Step 9 appends `Type` (T013) for `POST /test/type` and `Swipe` (T014) for `POST /test/swipe`.",
   "enum": [
     "info",
     "tap",
     "wait",
     "screenshot",
     "events",
-    "type"
+    "type",
+    "swipe"
   ],
   "title": "Capability",
   "type": "string"

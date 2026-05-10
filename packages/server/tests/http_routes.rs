@@ -37,6 +37,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Screenshot,
             Capability::Events,
             Capability::Type,
+            Capability::Swipe,
         ],
         token_required: None,
     });
@@ -194,6 +195,66 @@ async fn wait_invalid_selector_422() {
         v.get("error").and_then(Value::as_str),
         Some("invalid_selector")
     );
+}
+
+#[tokio::test]
+async fn swipe_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/swipe")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn swipe_zero_duration_422() {
+    let (mut state, _tx) = make_state();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    state.cmd_tx = cmd_tx;
+    // No GTK setup; respond to MainCmd::Swipe directly with the validation
+    // error, mirroring what `dispatch_swipe` would emit on the GLib thread.
+    tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            if let MainCmd::Swipe { reply, .. } = cmd {
+                let _ = reply.send(Err(gtk4_e2e_server::input::SwipeError::ZeroDuration));
+            }
+        }
+    });
+    let app = router(state);
+    let body = json!({
+        "from": {"x": 10, "y": 10},
+        "to": {"x": 10, "y": 50},
+        "duration_ms": 0,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/swipe")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_duration")
+    );
+    assert_eq!(v.get("reason").and_then(Value::as_str), Some("zero"));
 }
 
 // ----- GTK-bound routes (display required) -----
@@ -642,6 +703,132 @@ async fn type_selector_not_found_404() {
     assert_eq!(
         v.get("error").and_then(Value::as_str),
         Some("selector_not_found")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn swipe_endpoint_returns_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-swipe-ok")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let listbox = gtk::ListBox::new();
+    listbox.set_widget_name("list1");
+    for i in 0..30 {
+        let row = gtk::Label::new(Some(&format!("Row {i}")));
+        listbox.append(&row);
+    }
+    let scrolled = gtk::ScrolledWindow::builder()
+        .height_request(200)
+        .min_content_height(200)
+        .child(&listbox)
+        .build();
+    scrolled.set_widget_name("scroll1");
+    scrolled.set_kinetic_scrolling(false);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&scrolled)
+        .default_width(360)
+        .default_height(480)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({
+        "from": {"x": 100, "y": 300},
+        "to": {"x": 100, "y": 100},
+        "duration_ms": 200,
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/test/swipe")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let resp = tokio::select! {
+        r = app.oneshot(req) => r.unwrap(),
+        _ = async {
+            for _ in 0..400 {
+                for _ in 0..16 {
+                    if !gtk::glib::MainContext::default().iteration(false) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        } => panic!("pump finished before request returned"),
+    };
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn swipe_no_scrollable_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-swipe-404")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let label = gtk::Label::new(Some("plain"));
+    label.set_widget_name("label1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&label)
+        .default_width(360)
+        .default_height(200)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({
+        "from": {"x": 50, "y": 50},
+        "to": {"x": 50, "y": 20},
+        "duration_ms": 100,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/swipe")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("no_scrollable_at_point")
     );
 
     window.close();

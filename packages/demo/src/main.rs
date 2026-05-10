@@ -9,7 +9,8 @@ use std::rc::Rc;
 
 use gtk4::prelude::*;
 use gtk4::{
-    Align, Application, ApplicationWindow, Box as GtkBox, Button, Entry, Label, Orientation,
+    Align, Application, ApplicationWindow, Box as GtkBox, Button, Entry, Label, ListBox,
+    Orientation, ScrolledWindow,
 };
 
 const APP_ID: &str = "dev.gtk4-e2e.demo";
@@ -102,6 +103,44 @@ fn build_ui(
         });
     }
 
+    // Step 9 (T014): ScrolledWindow + ListBox so `swipe` has something to
+    // scroll, plus a `#scroll-pos` mirror label that surfaces
+    // `vadjustment.value` as a string for `state_eq` assertions.
+    let listbox = ListBox::new();
+    listbox.set_widget_name("list1");
+    // Plan §7.1 calls for 30 rows; observed `vadjustment.upper - page_size`
+    // tops out at ~244 px on quartz / xvfb when `vexpand(true)` lets the
+    // viewport eat the listbox real estate. We bump to 80 rows so a
+    // dy=300 swipe stays comfortably inside the scrollable range — without
+    // this the final value would clamp short and `state_eq label="300"`
+    // never matches.
+    for i in 0..80 {
+        let row = Label::new(Some(&format!("Row {i}")));
+        row.set_widget_name(&format!("row-{i}"));
+        listbox.append(&row);
+    }
+
+    let scrolled = ScrolledWindow::builder()
+        .height_request(200)
+        .min_content_height(200)
+        .vexpand(true)
+        .child(&listbox)
+        .build();
+    scrolled.set_widget_name("scroll1");
+    // Adjustment::set_value (used by `input::SwipeAnimation`) does not trigger
+    // kinetic scrolling, but disabling it is a small defence against future
+    // manual-drag tests bleeding momentum into deterministic assertions.
+    scrolled.set_kinetic_scrolling(false);
+
+    let scroll_pos = Label::new(Some("0"));
+    scroll_pos.set_widget_name("scroll-pos");
+    {
+        let scroll_pos = scroll_pos.clone();
+        scrolled.vadjustment().connect_value_changed(move |a| {
+            scroll_pos.set_text(&format!("{}", a.value() as i32));
+        });
+    }
+
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(8)
@@ -115,12 +154,14 @@ fn build_ui(
     vbox.append(&input1);
     vbox.append(&button);
     vbox.append(&label);
+    vbox.append(&scrolled);
+    vbox.append(&scroll_pos);
 
     let window = ApplicationWindow::builder()
         .application(app)
         .title("gtk4-e2e demo")
         .default_width(360)
-        .default_height(200)
+        .default_height(480)
         .child(&vbox)
         .build();
 

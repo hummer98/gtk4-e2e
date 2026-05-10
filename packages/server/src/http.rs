@@ -1,18 +1,20 @@
 //! HTTP layer (axum).
 //!
-//! Routes (plan §Q11 / §Q4 Step 6 / Step 9):
+//! Routes (plan §Q11 / §Q4 Step 6 / Step 9 — T013 adds /test/type, T014 adds /test/swipe):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
 //! | `/test/info`         | GET    | 200     | —       |
 //! | `/test/tap`          | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/swipe`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | (any unknown)        | *      | —       | 501 (axum fallback) |
 //!
 //! Plan Review M2: 501 = capability missing. 404 = domain not-found (only
-//! emitted by `tap` when a selector matches no widget).
+//! emitted by `tap` when a selector matches no widget, and by `swipe` when
+//! the `from` point is not contained in any `ScrolledWindow`).
 
 use std::sync::Arc;
 
@@ -27,9 +29,9 @@ use axum::{
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::input::{TapError, TypeError};
+use crate::input::{SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError};
-use crate::proto::{EventEnvelope, Info, TapTarget, TypeRequest, WaitRequest};
+use crate::proto::{EventEnvelope, Info, SwipeRequest, TapTarget, TypeRequest, WaitRequest};
 use crate::snapshot::ScreenshotError;
 use crate::tree::parse_selector;
 use crate::wait::{poll_until, WaitError, MAX_TIMEOUT_MS};
@@ -49,6 +51,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/test/info", get(get_info))
         .route("/test/tap", post(post_tap))
+        .route("/test/swipe", post(post_swipe))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
@@ -136,6 +139,53 @@ fn tap_error_response(e: TapError) -> Response {
             validation_error("out_of_bounds", json!({ "x": x, "y": y }))
         }
         TapError::NoActiveWindow => validation_error("no_active_window", json!({})),
+    }
+}
+
+async fn post_swipe(State(state): State<AppState>, body: String) -> Response {
+    let req: SwipeRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Swipe {
+            from: req.from,
+            to: req.to,
+            duration_ms: req.duration_ms,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match rx.await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => swipe_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+
+fn swipe_error_response(e: SwipeError) -> Response {
+    match e {
+        SwipeError::OutOfBounds { x, y } => {
+            validation_error("out_of_bounds", json!({ "x": x, "y": y }))
+        }
+        SwipeError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        SwipeError::NoScrollableAtPoint { x, y } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_scrollable_at_point", "x": x, "y": y }),
+        ),
+        SwipeError::ZeroDuration => {
+            validation_error("invalid_duration", json!({ "reason": "zero" }))
+        }
+        SwipeError::DurationTooLong { duration_ms } => validation_error(
+            "invalid_duration",
+            json!({ "reason": "too_long", "duration_ms": duration_ms }),
+        ),
     }
 }
 

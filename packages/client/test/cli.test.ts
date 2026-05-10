@@ -33,6 +33,7 @@ interface RouteHandlers {
   tap?: (body: unknown) => Response | Promise<Response>;
   type?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
+  swipe?: (body: unknown) => Response | Promise<Response>;
 }
 
 function startMock(handlers: RouteHandlers): MockServer {
@@ -59,6 +60,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
+      if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       return new Response("not found", { status: 404 });
     },
   });
@@ -262,6 +264,77 @@ describe("cli type", () => {
     ]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cli swipe", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends from / to / duration_ms with explicit --duration", async () => {
+    mock = startMock({ swipe: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli([
+      "swipe",
+      "100,400",
+      "100,100",
+      "--duration",
+      "300",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      from: { x: 100, y: 400 },
+      to: { x: 100, y: 100 },
+      duration_ms: 300,
+    });
+  });
+
+  test("default duration is 300ms when --duration omitted", async () => {
+    mock = startMock({ swipe: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli([
+      "swipe",
+      "10,20",
+      "30,40",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      from: { x: 10, y: 20 },
+      to: { x: 30, y: 40 },
+      duration_ms: 300,
+    });
+  });
+
+  test("missing positional args exits 2", async () => {
+    const result = await runCli(["swipe", "10,20"]);
+    expect(result.exitCode).toBe(2);
+  });
+
+  test("negative coordinates exit 2 (parseSwipeXY non-negative only)", async () => {
+    mock = startMock({ swipe: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli([
+      "swipe",
+      "-100,100",
+      "100,100",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("non-negative");
+  });
+
+  test("USAGE mentions the swipe subcommand", async () => {
+    const result = await runCli(["--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("swipe");
   });
 });
 
