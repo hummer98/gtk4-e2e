@@ -10,6 +10,8 @@ use crate::gtk;
 use crate::gtk::prelude::*;
 use crate::proto::{Bounds, ElementInfo, ElementsResponse};
 use crate::tree::{parse_selector, Selector};
+use crate::wait::{PropReadError, WidgetLike};
+use std::collections::BTreeMap;
 
 /// Domain errors surfaced by `walk_elements`.
 ///
@@ -46,6 +48,7 @@ pub fn walk_elements(
     app: &gtk::Application,
     selector: Option<&str>,
     max_depth: Option<u32>,
+    props: &[String],
 ) -> Result<ElementsResponse, ElementsError> {
     let windows = app.windows();
     if windows.is_empty() {
@@ -68,11 +71,19 @@ pub fn walk_elements(
         let widget = window.upcast::<gtk::Widget>();
         match &parsed {
             None => {
-                let info = to_element_info(&widget, &widget, 0, max_depth, &mut counter);
+                let info = to_element_info(&widget, &widget, 0, max_depth, props, &mut counter);
                 roots.push(info);
             }
             Some(sel) => {
-                collect_matches(&widget, &widget, sel, max_depth, &mut counter, &mut roots);
+                collect_matches(
+                    &widget,
+                    &widget,
+                    sel,
+                    max_depth,
+                    props,
+                    &mut counter,
+                    &mut roots,
+                );
             }
         }
     }
@@ -86,18 +97,19 @@ fn collect_matches(
     window_root: &gtk::Widget,
     sel: &Selector,
     max_depth: Option<u32>,
+    props: &[String],
     counter: &mut u32,
     roots: &mut Vec<ElementInfo>,
 ) {
     if widget_matches(widget, sel) {
-        let info = to_element_info(widget, window_root, 0, max_depth, counter);
+        let info = to_element_info(widget, window_root, 0, max_depth, props, counter);
         roots.push(info);
         return;
     }
     let mut cur = widget.first_child();
     while let Some(child) = cur {
         let next = child.next_sibling();
-        collect_matches(&child, window_root, sel, max_depth, counter, roots);
+        collect_matches(&child, window_root, sel, max_depth, props, counter, roots);
         cur = next;
     }
 }
@@ -120,6 +132,7 @@ fn to_element_info(
     window_root: &gtk::Widget,
     depth: u32,
     max_depth: Option<u32>,
+    props: &[String],
     counter: &mut u32,
 ) -> ElementInfo {
     let id = format!("e{}", *counter);
@@ -147,6 +160,7 @@ fn to_element_info(
         width: r.width() as f64,
         height: r.height() as f64,
     });
+    let properties = read_requested_properties(widget, props);
 
     let mut children = Vec::new();
     if max_depth.is_none_or(|m| depth < m) {
@@ -158,6 +172,7 @@ fn to_element_info(
                 window_root,
                 depth + 1,
                 max_depth,
+                props,
                 counter,
             ));
             cur = next;
@@ -172,8 +187,77 @@ fn to_element_info(
         visible,
         sensitive,
         bounds,
+        properties,
         children,
     }
+}
+
+/// Build the per-node `properties` map for an opt-in `props=` request.
+///
+/// Returns `None` when no properties were requested so the field stays
+/// off the wire (see `ElementInfo` doc comment). Each requested name
+/// is looked up via the shared `WidgetLike::read_property_as_json`
+/// helper from `wait.rs`; missing properties and unsupported types
+/// surface as the documented sentinel objects rather than dropping
+/// the entry, so callers can tell "absent on this widget" apart from
+/// "I forgot to ask for it".
+///
+/// The literal token `"*"` in `props` is the wildcard: it expands to
+/// every readable GObject property advertised by this widget's class
+/// (`list_properties()` filtered on `ParamFlags::READABLE`). Mixing
+/// `"*"` with specific names is allowed — explicit names always win,
+/// so a value already in `map` is not overwritten by the wildcard pass.
+fn read_requested_properties(
+    widget: &gtk::Widget,
+    props: &[String],
+) -> Option<BTreeMap<String, serde_json::Value>> {
+    if props.is_empty() {
+        return None;
+    }
+    let mut map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let mut want_all = false;
+    for name in props {
+        if name == "*" {
+            want_all = true;
+            continue;
+        }
+        let entry = match widget.read_property_as_json(name) {
+            Ok(v) => v,
+            Err(PropReadError::Missing) => {
+                serde_json::json!({ "$missing": true })
+            }
+            Err(PropReadError::Unsupported(type_name)) => {
+                serde_json::json!({ "$unsupported": type_name })
+            }
+        };
+        map.insert(name.clone(), entry);
+    }
+    if want_all {
+        for pspec in widget.list_properties() {
+            if !pspec.flags().contains(gtk::glib::ParamFlags::READABLE) {
+                continue;
+            }
+            let name = pspec.name().to_string();
+            if map.contains_key(&name) {
+                // Explicit ask wins over the wildcard expansion.
+                continue;
+            }
+            let entry = match widget.read_property_as_json(&name) {
+                Ok(v) => v,
+                Err(PropReadError::Missing) => {
+                    // list_properties() advertised the name, so Missing
+                    // here is the property layer disagreeing with itself —
+                    // surface the sentinel so the gap is visible.
+                    serde_json::json!({ "$missing": true })
+                }
+                Err(PropReadError::Unsupported(type_name)) => {
+                    serde_json::json!({ "$unsupported": type_name })
+                }
+            };
+            map.insert(name, entry);
+        }
+    }
+    Some(map)
 }
 
 fn node_count(info: &ElementInfo) -> u32 {

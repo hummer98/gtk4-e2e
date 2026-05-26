@@ -4,6 +4,7 @@
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Response payload of `GET /test/info`.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
@@ -197,6 +198,21 @@ pub struct Bounds {
 /// tree.rs:169-176).
 ///
 /// `bounds` is `None` for unrealized / unmapped widgets.
+///
+/// `properties` is populated only when the caller asks for it via the
+/// `props=` query parameter on `GET /test/elements` (opt-in; absent in
+/// the response when empty). Each entry maps the requested GObject
+/// property name to its current value, JSON-encoded by
+/// `wait::read_property_as_json` (MVP types: String, bool, i32, f64).
+/// Sentinels are used for failure modes so the response stays a
+/// flat JSON object instead of a tagged union:
+///
+/// - `{"$missing": true}` — widget exposes no such property.
+/// - `{"$unsupported": "GTypeName"}` — property exists but its value
+///   type is outside the MVP set.
+///
+/// These sentinels are stable wire contract; SDKs may decode them into
+/// a richer typed result. Key ordering is deterministic (BTreeMap).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
 pub struct ElementInfo {
     pub id: String,
@@ -209,6 +225,8 @@ pub struct ElementInfo {
     pub sensitive: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<BTreeMap<String, serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<ElementInfo>,
 }

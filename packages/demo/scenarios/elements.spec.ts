@@ -90,4 +90,71 @@ describe.skipIf(!haveDisplay)("scenarios/elements", () => {
       await teardown();
     }
   }, 30_000);
+
+  test("props= reads GObject properties per matched widget", async () => {
+    // Verifies the opt-in property read-through end-to-end:
+    //   - typing into #entry1 changes the GtkEntry `text` value
+    //   - elements({ selector, props: ["text"] }) returns the live value
+    //   - an unknown property surfaces the $missing sentinel
+    //   - omitting props leaves `properties` undefined (legacy shape)
+    const { client, teardown } = await spawnDemo();
+    try {
+      await waitForEntryVisible(client);
+
+      // Drive the live text via the public type() helper so the value
+      // we read back is provably the GTK-computed state, not the static
+      // initial.
+      await client.type("#entry1", "hello-props");
+
+      const resp = await client.elements({
+        selector: "#entry1",
+        props: ["text", "no-such-property"],
+      });
+      expect(resp.roots.length).toBe(1);
+      const node = resp.roots[0];
+      expect(node.kind).toBe("GtkEntry");
+      expect(node.properties).toBeDefined();
+      const map = node.properties as Record<string, unknown>;
+      expect(map.text).toBe("hello-props");
+      expect(map["no-such-property"]).toEqual({ $missing: true });
+
+      const legacy = await client.elements({ selector: "#entry1" });
+      expect(legacy.roots[0].properties).toBeUndefined();
+    } finally {
+      await teardown();
+    }
+  }, 30_000);
+
+  test("props=['*'] enumerates every readable GObject property", async () => {
+    // Wildcard expansion at the server side: every GObject property
+    // advertised by the matched widget's class shows up in `properties`,
+    // with unsupported types degrading to the `$unsupported` sentinel.
+    const { client, teardown } = await spawnDemo();
+    try {
+      await waitForEntryVisible(client);
+      const resp = await client.elements({
+        selector: "#entry1",
+        props: ["*"],
+      });
+      expect(resp.roots.length).toBe(1);
+      const node = resp.roots[0];
+      expect(node.kind).toBe("GtkEntry");
+      const map = node.properties as Record<string, unknown>;
+      expect(map).toBeDefined();
+      // A representative slice: every GtkWidget exposes these, and
+      // GtkEntry adds `text` on top.
+      for (const required of [
+        "name",
+        "visible",
+        "sensitive",
+        "width-request",
+        "height-request",
+        "text",
+      ]) {
+        expect(map[required], `wildcard should include ${required}`).toBeDefined();
+      }
+    } finally {
+      await teardown();
+    }
+  }, 30_000);
 });
