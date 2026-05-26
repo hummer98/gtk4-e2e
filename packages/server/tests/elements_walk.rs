@@ -239,12 +239,68 @@ fn props_unknown_name_emits_missing_sentinel() {
     let resp = walk_elements(&app, Some("#input1"), None, &props).expect("walk should succeed");
     let node = &resp.roots[0];
     let map = node.properties.as_ref().expect("properties present");
-    let entry = map.get("this-property-does-not-exist").expect("entry present");
+    let entry = map
+        .get("this-property-does-not-exist")
+        .expect("entry present");
     assert_eq!(
         entry,
         &serde_json::json!({"$missing": true}),
         "missing properties should surface the $missing sentinel"
     );
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn props_wildcard_enumerates_readable_gobject_properties() {
+    // `props=["*"]` should expand to every readable GObject property
+    // advertised by the widget. We don't assert the full set (it varies
+    // with GTK4 minor versions) but we do require:
+    //   - `name` is present and matches the static widget_name we set
+    //   - several well-known GtkWidget-class properties are listed
+    //   - explicit names listed alongside `*` are preserved (the wildcard
+    //     must not stomp on an explicitly-supplied key).
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_fixture();
+    let props = vec!["*".to_string(), "name".to_string()];
+    let resp = walk_elements(&app, Some("#input1"), None, &props).expect("walk should succeed");
+    let node = &resp.roots[0];
+    let map = node
+        .properties
+        .as_ref()
+        .expect("properties present when * requested");
+
+    // `name` is a GObject property on GtkWidget — set by set_widget_name.
+    assert_eq!(
+        map.get("name"),
+        Some(&serde_json::Value::String("input1".to_string())),
+        "explicit + wildcard: name should equal the set widget_name"
+    );
+
+    // A handful of GtkWidget-class properties that are stable across the
+    // gtk4-rs versions we support — used here as a sanity probe that the
+    // wildcard expansion really enumerated the class, not just whatever
+    // was named explicitly. We do NOT assert specific values for these,
+    // only that they are listed (the value may be a sentinel for
+    // unsupported types).
+    for required in ["visible", "sensitive", "width-request", "height-request"] {
+        assert!(
+            map.contains_key(required),
+            "wildcard expansion missing expected GtkWidget property {required:?}; got {:?}",
+            map.keys().collect::<Vec<_>>()
+        );
+    }
+
+    // `text` is the GtkEntry-specific property — proves we dispatched
+    // off the actual widget class, not just GtkWidget.
+    assert!(
+        map.contains_key("text"),
+        "wildcard expansion on GtkEntry should include `text`; got {:?}",
+        map.keys().collect::<Vec<_>>()
+    );
+
     window.close();
     common::pump_glib(32);
 }

@@ -250,6 +250,12 @@ export class E2EClient {
    *   (server currently maps String / bool / i32 / f64; other types
    *   round-trip as this sentinel).
    *
+   * The literal token `"*"` in `props` is the wildcard: the server
+   * expands it to every readable GObject property advertised by the
+   * matched widget's class (`list_properties()`). Mixing `"*"` with
+   * specific names is allowed; explicitly-named values always win
+   * over the wildcard expansion.
+   *
    * Without `props`, `node.properties` is `undefined` (legacy shape).
    */
   async elements(opts?: {

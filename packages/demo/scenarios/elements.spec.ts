@@ -124,4 +124,37 @@ describe.skipIf(!haveDisplay)("scenarios/elements", () => {
       await teardown();
     }
   }, 30_000);
+
+  test("props=['*'] enumerates every readable GObject property", async () => {
+    // Wildcard expansion at the server side: every GObject property
+    // advertised by the matched widget's class shows up in `properties`,
+    // with unsupported types degrading to the `$unsupported` sentinel.
+    const { client, teardown } = await spawnDemo();
+    try {
+      await waitForEntryVisible(client);
+      const resp = await client.elements({
+        selector: "#entry1",
+        props: ["*"],
+      });
+      expect(resp.roots.length).toBe(1);
+      const node = resp.roots[0];
+      expect(node.kind).toBe("GtkEntry");
+      const map = node.properties as Record<string, unknown>;
+      expect(map).toBeDefined();
+      // A representative slice: every GtkWidget exposes these, and
+      // GtkEntry adds `text` on top.
+      for (const required of [
+        "name",
+        "visible",
+        "sensitive",
+        "width-request",
+        "height-request",
+        "text",
+      ]) {
+        expect(map[required], `wildcard should include ${required}`).toBeDefined();
+      }
+    } finally {
+      await teardown();
+    }
+  }, 30_000);
 });

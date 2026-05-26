@@ -142,6 +142,28 @@ objects under the requested key so the wire format stays a flat map:
 When `props` is omitted (or empty) the `properties` field is **absent**
 from each node — the legacy response shape is preserved.
 
+The literal token `"*"` is the wildcard: the server expands it to
+every readable GObject property advertised by the matched widget's
+class (`list_properties()` filtered on `ParamFlags::READABLE`).
+Properties whose value type is outside the MVP set surface as
+`{"$unsupported": "..."}` so the key is still present in the map.
+
+```ts
+const r = await client.elements({ selector: "#entry1", props: ["*"] });
+// r.roots[0].properties → {
+//   "name": "entry1",
+//   "visible": true,
+//   "sensitive": true,
+//   "width-request": -1,
+//   "text": "...",
+//   ...every other readable property on GtkEntry's class...
+// }
+```
+
+Mixing `"*"` with specific names is allowed; explicitly-named values
+win over the wildcard expansion (useful when you want a typed read
+plus a complete dump for triage).
+
 **What `elements()` does *not* expose** (by design / GTK4 limit):
 
 - CSS computed style (color/font/padding actually applied) — GTK4 has

@@ -201,6 +201,12 @@ fn to_element_info(
 /// surface as the documented sentinel objects rather than dropping
 /// the entry, so callers can tell "absent on this widget" apart from
 /// "I forgot to ask for it".
+///
+/// The literal token `"*"` in `props` is the wildcard: it expands to
+/// every readable GObject property advertised by this widget's class
+/// (`list_properties()` filtered on `ParamFlags::READABLE`). Mixing
+/// `"*"` with specific names is allowed — explicit names always win,
+/// so a value already in `map` is not overwritten by the wildcard pass.
 fn read_requested_properties(
     widget: &gtk::Widget,
     props: &[String],
@@ -208,8 +214,13 @@ fn read_requested_properties(
     if props.is_empty() {
         return None;
     }
-    let mut map = BTreeMap::new();
+    let mut map: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let mut want_all = false;
     for name in props {
+        if name == "*" {
+            want_all = true;
+            continue;
+        }
         let entry = match widget.read_property_as_json(name) {
             Ok(v) => v,
             Err(PropReadError::Missing) => {
@@ -220,6 +231,31 @@ fn read_requested_properties(
             }
         };
         map.insert(name.clone(), entry);
+    }
+    if want_all {
+        for pspec in widget.list_properties() {
+            if !pspec.flags().contains(gtk::glib::ParamFlags::READABLE) {
+                continue;
+            }
+            let name = pspec.name().to_string();
+            if map.contains_key(&name) {
+                // Explicit ask wins over the wildcard expansion.
+                continue;
+            }
+            let entry = match widget.read_property_as_json(&name) {
+                Ok(v) => v,
+                Err(PropReadError::Missing) => {
+                    // list_properties() advertised the name, so Missing
+                    // here is the property layer disagreeing with itself —
+                    // surface the sentinel so the gap is visible.
+                    serde_json::json!({ "$missing": true })
+                }
+                Err(PropReadError::Unsupported(type_name)) => {
+                    serde_json::json!({ "$unsupported": type_name })
+                }
+            };
+            map.insert(name, entry);
+        }
     }
     Some(map)
 }
