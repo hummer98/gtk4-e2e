@@ -15,6 +15,8 @@ pub mod input;
 #[cfg(feature = "e2e")]
 pub mod main_thread;
 #[cfg(feature = "e2e")]
+pub mod notify;
+#[cfg(feature = "e2e")]
 mod port;
 #[cfg(feature = "e2e")]
 pub mod proto;
@@ -52,7 +54,7 @@ pub use crate::start_impl::{current_rfc3339, start, Handle};
 mod start_impl {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     use crate::http::{router, AppState};
     use crate::main_thread::{install_app, spawn_receiver_loop, MainCmd};
@@ -72,6 +74,7 @@ mod start_impl {
         info: Arc<Info>,
         event_tx: tokio::sync::broadcast::Sender<EventEnvelope>,
         state: AppDefinedState,
+        clock_base: Instant,
     }
 
     impl Handle {
@@ -114,6 +117,24 @@ mod start_impl {
         pub fn set_state(&self, value: serde_json::Value) {
             self.state.set(value);
         }
+
+        /// Register a widget so its allowlisted `notify::<property>` signals
+        /// are broadcast on `WS /test/events` as `EventKind::Property`
+        /// envelopes (T026).
+        ///
+        /// **Thread**: must be called from the GLib main thread (the same
+        /// thread that runs `gtk::init()`). The hook closure also fires on
+        /// that thread, so `event_tx.send` happens synchronously.
+        ///
+        /// **Idempotency**: not guaranteed. Calling this twice for the same
+        /// widget attaches the hook twice and emits duplicate events; call
+        /// once per widget (typically in `build_ui`).
+        ///
+        /// Returns the list of property names that were hooked (empty when
+        /// the widget's GType is not in [`crate::notify::ALLOWLIST`]).
+        pub fn register_property_stream(&self, widget: &crate::gtk::Widget) -> Vec<String> {
+            crate::notify::register(&self.event_tx, self.clock_base, widget)
+        }
     }
 
     /// Spawn the in-process e2e server.
@@ -129,6 +150,7 @@ mod start_impl {
     }
 
     fn start_inner(app: &crate::gtk::Application) -> std::io::Result<Handle> {
+        let clock_base = Instant::now();
         let dir = runtime_dir()?;
         let (port, std_listener) = pick_free_listener()?;
         std_listener.set_nonblocking(true)?;
@@ -219,6 +241,7 @@ mod start_impl {
             info,
             event_tx,
             state: app_state,
+            clock_base,
         })
     }
 

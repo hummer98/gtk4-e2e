@@ -341,6 +341,20 @@ pub enum PropReadError {
     Missing,
 }
 
+/// Convert a `PropReadError` into the wire-level sentinel object shared by
+/// `/test/elements?props=` (polling) and `/test/events` (kind=property
+/// stream). Centralising this here keeps the JSON shape consistent across
+/// endpoints and lets `notify.rs` reuse the same sentinel without copying
+/// the match arms from `elements.rs`.
+pub(crate) fn sentinel_for(err: PropReadError) -> Value {
+    match err {
+        PropReadError::Missing => serde_json::json!({ "$missing": true }),
+        PropReadError::Unsupported(type_name) => {
+            serde_json::json!({ "$unsupported": type_name })
+        }
+    }
+}
+
 /// Behaviour required from a tree node for `eval_condition` to operate on it.
 ///
 /// GTK `Widget` implements this for production; mock fixtures in the unit

@@ -4,7 +4,8 @@
   "description": "Discriminator for `EventEnvelope.kind`.\n\n`LogLine` is reserved for a future tracing-layer integration (Step >= 8); the variant exists today so filter strings are stable across versions. Until that integration ships, the server never produces `EventEnvelope`s with `kind = LogLine` — clients can pass `\"log_line\"` in the filter list without error, but no frames will be delivered for that kind alone.",
   "enum": [
     "state_change",
-    "log_line"
+    "log_line",
+    "property"
   ],
   "title": "EventKind",
   "type": "string"

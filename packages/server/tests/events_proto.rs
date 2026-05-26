@@ -50,6 +50,14 @@ fn parse_kinds_csv_yields_set() {
 }
 
 #[test]
+fn parse_kinds_accepts_property() {
+    // T026: the new `EventKind::Property` discriminator must be resolvable
+    // via the CSV filter so SDK clients can subscribe to it from day one.
+    let set = parse_kinds(Some("property"));
+    assert!(set.contains(&EventKind::Property));
+}
+
+#[test]
 fn parse_kinds_unknown_token_is_ignored() {
     // Forward-compat: unknown kinds (from a newer server) become a no-op
     // rather than a 4xx, so SDKs from one version continue to work against

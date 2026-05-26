@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry,
-    GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Switch, ToggleButton,
+    GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Stack, Switch, ToggleButton,
 };
 #[cfg(feature = "e2e")]
 use serde_json::{json, Value};
@@ -31,14 +31,11 @@ fn main() {
         let server_slot = server_slot.clone();
         app.connect_activate(move |app| {
             #[cfg(feature = "e2e")]
-            build_ui(app, server_slot.clone());
-            #[cfg(not(feature = "e2e"))]
-            build_ui(app);
-
-            #[cfg(feature = "e2e")]
             {
                 // `activate` may fire multiple times (e.g. primary instance
-                // handover). Guard so we only spawn the server once.
+                // handover). Start the server on the first activation so
+                // `build_ui` can wire `register_property_stream` (T026) on
+                // freshly constructed widgets.
                 if server_slot.borrow().is_none() {
                     let handle = gtk4_e2e_server::start(app);
                     eprintln!(
@@ -48,6 +45,11 @@ fn main() {
                     *server_slot.borrow_mut() = Some(handle);
                 }
             }
+
+            #[cfg(feature = "e2e")]
+            build_ui(app, server_slot.clone());
+            #[cfg(not(feature = "e2e"))]
+            build_ui(app);
         });
     }
 
@@ -242,6 +244,39 @@ fn build_ui(
     let zoom_pos = Label::new(Some("1.00"));
     zoom_pos.set_widget_name("zoom-pos");
 
+    // T026: GtkStack so `WS /test/events` (kind=property) has a default
+    // transition source to demonstrate. Each named page is a Label; flipping
+    // the visible page via the toggle button below fires `notify::visible-
+    // child-name`, which `register_property_stream` forwards to the bus.
+    let mode_stack = Stack::builder().build();
+    mode_stack.set_widget_name("mode-stack");
+    let mode1_page = Label::new(Some("mode1 content"));
+    let mode2_page = Label::new(Some("mode2 content"));
+    mode_stack.add_named(&mode1_page, Some("mode1"));
+    mode_stack.add_named(&mode2_page, Some("mode2"));
+
+    let mode_toggle = Button::with_label("Toggle mode");
+    mode_toggle.set_widget_name("mode-toggle");
+    {
+        let mode_stack = mode_stack.clone();
+        mode_toggle.connect_clicked(move |_| {
+            let next = match mode_stack.visible_child_name().as_deref() {
+                Some("mode2") => "mode1",
+                _ => "mode2",
+            };
+            mode_stack.set_visible_child_name(next);
+        });
+    }
+
+    // T026: surface `notify::visible-child-name` on the bus as
+    // `EventKind::Property`. `register_property_stream` is a no-op when no
+    // server is attached (e.g. demo built without `--features e2e`).
+    #[cfg(feature = "e2e")]
+    if let Some(handle) = server_slot.borrow().as_ref() {
+        handle.register_property_stream(mode_stack.upcast_ref());
+        handle.register_property_stream(switch1.upcast_ref());
+    }
+
     let gesture = GestureZoom::new();
     {
         let current_scale = current_scale.clone();
@@ -278,6 +313,8 @@ fn build_ui(
     vbox.append(&scroll_pos);
     vbox.append(&drawing_area);
     vbox.append(&zoom_pos);
+    vbox.append(&mode_stack);
+    vbox.append(&mode_toggle);
 
     let window = ApplicationWindow::builder()
         .application(app)

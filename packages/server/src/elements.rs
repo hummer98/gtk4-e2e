@@ -10,7 +10,7 @@ use crate::gtk;
 use crate::gtk::prelude::*;
 use crate::proto::{Bounds, ElementInfo, ElementsResponse};
 use crate::tree::{parse_selector, Selector};
-use crate::wait::{PropReadError, WidgetLike};
+use crate::wait::WidgetLike;
 use std::collections::BTreeMap;
 
 /// Domain errors surfaced by `walk_elements`.
@@ -221,15 +221,9 @@ fn read_requested_properties(
             want_all = true;
             continue;
         }
-        let entry = match widget.read_property_as_json(name) {
-            Ok(v) => v,
-            Err(PropReadError::Missing) => {
-                serde_json::json!({ "$missing": true })
-            }
-            Err(PropReadError::Unsupported(type_name)) => {
-                serde_json::json!({ "$unsupported": type_name })
-            }
-        };
+        let entry = widget
+            .read_property_as_json(name)
+            .unwrap_or_else(crate::wait::sentinel_for);
         map.insert(name.clone(), entry);
     }
     if want_all {
@@ -242,18 +236,12 @@ fn read_requested_properties(
                 // Explicit ask wins over the wildcard expansion.
                 continue;
             }
-            let entry = match widget.read_property_as_json(&name) {
-                Ok(v) => v,
-                Err(PropReadError::Missing) => {
-                    // list_properties() advertised the name, so Missing
-                    // here is the property layer disagreeing with itself —
-                    // surface the sentinel so the gap is visible.
-                    serde_json::json!({ "$missing": true })
-                }
-                Err(PropReadError::Unsupported(type_name)) => {
-                    serde_json::json!({ "$unsupported": type_name })
-                }
-            };
+            // list_properties() advertised the name, so a Missing here means
+            // the property layer disagrees with itself — `sentinel_for` keeps
+            // the gap visible via the `$missing` sentinel.
+            let entry = widget
+                .read_property_as_json(&name)
+                .unwrap_or_else(crate::wait::sentinel_for);
             map.insert(name, entry);
         }
     }

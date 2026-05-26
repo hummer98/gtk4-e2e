@@ -21,6 +21,7 @@ const ALL_SCHEMA_FILES: &[&str] = &[
     "WaitResult.schema.json",
     "EventEnvelope.schema.json",
     "EventKind.schema.json",
+    "PropertyEventData.schema.json",
     "Bounds.schema.json",
     "ElementInfo.schema.json",
     "ElementsResponse.schema.json",
@@ -203,6 +204,47 @@ fn wait_condition_has_app_state_eq() {
         s.contains("\"path\""),
         "WaitCondition schema should expose `path` for app_state_eq: {s}"
     );
+}
+
+#[test]
+fn event_kind_schema_includes_property_variant() {
+    // T026: `EventKind::Property` must surface in the schema enum so SDK
+    // codegen narrows envelopes by the new discriminator.
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+    let raw = fs::read_to_string(tmp.path().join("EventKind.schema.json")).unwrap();
+    let v: Value = serde_json::from_str(&raw).unwrap();
+    let variants: Vec<&str> = v
+        .get("enum")
+        .and_then(Value::as_array)
+        .expect("EventKind schema should have enum array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    assert!(
+        variants.contains(&"property"),
+        "missing `property` in {variants:?}"
+    );
+}
+
+#[test]
+fn property_event_data_schema_emits_required_fields() {
+    // T026: `PropertyEventData` schema must require the five payload fields
+    // so TS narrowing on `kind = "property"` gives the SDK a fully typed body.
+    let tmp = tempfile::tempdir().unwrap();
+    write_schemas(tmp.path()).unwrap();
+    let raw = fs::read_to_string(tmp.path().join("PropertyEventData.schema.json")).unwrap();
+    let v: Value = serde_json::from_str(&raw).unwrap();
+    let required: Vec<&str> = v
+        .get("required")
+        .and_then(Value::as_array)
+        .expect("PropertyEventData schema should have required array")
+        .iter()
+        .filter_map(Value::as_str)
+        .collect();
+    for f in ["widget_id", "widget_kind", "property", "value", "ts_ns"] {
+        assert!(required.contains(&f), "missing required field {f}");
+    }
 }
 
 #[test]
