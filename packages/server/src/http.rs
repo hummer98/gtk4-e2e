@@ -425,6 +425,7 @@ async fn get_elements(
         .send(MainCmd::Elements {
             selector: q.selector,
             max_depth: q.max_depth,
+            props: q.props,
             reply: tx,
         })
         .await
@@ -442,12 +443,16 @@ async fn get_elements(
 struct ElementsQuery {
     selector: Option<String>,
     max_depth: Option<u32>,
+    /// Opt-in list of GObject property names to read per matched widget.
+    /// Empty when `props=` is absent or set to the empty string.
+    props: Vec<String>,
 }
 
 #[allow(clippy::result_large_err)] // axum Response is the standard error path here; boxing it would force every caller to unbox.
 fn parse_elements_query(raw: &str) -> Result<ElementsQuery, Response> {
     let mut selector: Option<String> = None;
     let mut max_depth: Option<u32> = None;
+    let mut props: Vec<String> = Vec::new();
     if !raw.is_empty() {
         for pair in raw.split('&') {
             if pair.is_empty() {
@@ -477,6 +482,20 @@ fn parse_elements_query(raw: &str) -> Result<ElementsQuery, Response> {
                         ));
                     }
                 },
+                // `props=text,placeholder-text` — comma-separated GObject
+                // property names. Repeated `props=` keys also accumulate
+                // (so `?props=text&props=label` works). Empty segments
+                // (`props=` alone, `props=,foo`, trailing comma) are
+                // silently dropped; we don't reject because the empty
+                // form is the natural "no props" default.
+                "props" => {
+                    for name in value.split(',') {
+                        let name = name.trim();
+                        if !name.is_empty() {
+                            props.push(name.to_string());
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -484,6 +503,7 @@ fn parse_elements_query(raw: &str) -> Result<ElementsQuery, Response> {
     Ok(ElementsQuery {
         selector,
         max_depth,
+        props,
     })
 }
 

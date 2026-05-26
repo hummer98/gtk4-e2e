@@ -240,11 +240,29 @@ export class E2EClient {
    * subtree. With `selector` (`#name` or `.class`), returns one root per
    * matching widget — `roots: []` is a clean miss (HTTP 200, not 404).
    * `maxDepth` caps the depth of each returned subtree (`0` = root only).
+   *
+   * Pass `props` to opt-in per-widget GObject property reads — each name
+   * is looked up against the matched widget and surfaced under
+   * `node.properties[name]`. Sentinels distinguish failure modes:
+   *
+   * - `{ "$missing": true }` — widget exposes no such property.
+   * - `{ "$unsupported": "GTypeName" }` — type outside MVP support
+   *   (server currently maps String / bool / i32 / f64; other types
+   *   round-trip as this sentinel).
+   *
+   * Without `props`, `node.properties` is `undefined` (legacy shape).
    */
-  async elements(opts?: { selector?: string; maxDepth?: number }): Promise<ElementsResponse> {
+  async elements(opts?: {
+    selector?: string;
+    maxDepth?: number;
+    props?: string[];
+  }): Promise<ElementsResponse> {
     const query: Record<string, string> = {};
     if (opts?.selector !== undefined) query.selector = opts.selector;
     if (opts?.maxDepth !== undefined) query.max_depth = String(opts.maxDepth);
+    if (opts?.props !== undefined && opts.props.length > 0) {
+      query.props = opts.props.join(",");
+    }
     return this._request<ElementsResponse>({
       method: "GET",
       path: "/test/elements",

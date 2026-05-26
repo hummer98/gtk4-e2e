@@ -85,6 +85,9 @@ pub enum MainCmd {
     Elements {
         selector: Option<String>,
         max_depth: Option<u32>,
+        /// Opt-in list of GObject property names to read per matched
+        /// widget. Empty = legacy response (no `properties` field).
+        props: Vec<String>,
         reply: oneshot::Sender<Result<ElementsResponse, ElementsError>>,
     },
     /// Synthesize a pinch over `duration_ms` (T015, plan §6.2). Replies on
@@ -183,11 +186,13 @@ fn handle_cmd(cmd: MainCmd) {
         MainCmd::Elements {
             selector,
             max_depth,
+            props,
             reply,
         } => {
-            let outcome =
-                with_app(|app| crate::elements::walk_elements(app, selector.as_deref(), max_depth))
-                    .unwrap_or(Err(ElementsError::NoActiveWindow));
+            let outcome = with_app(|app| {
+                crate::elements::walk_elements(app, selector.as_deref(), max_depth, &props)
+            })
+            .unwrap_or(Err(ElementsError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
         MainCmd::Pinch {

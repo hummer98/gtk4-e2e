@@ -89,6 +89,69 @@ bunx biome lint --write .
 (Rust toolchain 不要、committed JSON Schema から生成される)。
 CI は同じ手順を `tsc --noEmit` の前段に組み込み済み。
 
+## Widget tree query (`GET /test/elements`)
+
+`E2EClient.elements()` walks the GTK widget tree and returns a JSON
+snapshot. Without options it returns one `roots[]` entry per active
+window with the full subtree; with `selector` (`#name` or `.class`) it
+returns one entry per matching widget (empty `roots: []` on a clean
+miss, still HTTP 200). `maxDepth` caps the depth of each subtree
+(`0` = root only).
+
+Each node carries a fixed schema (`ElementInfo` in
+`packages/server/src/proto.rs`):
+
+| Field | Source | Notes |
+|---|---|---|
+| `id` | DFS pre-order index (`e0`, `e1`, …) | Walk-local; never use across requests |
+| `kind` | `widget.type_().name()` | GType name, e.g. `GtkEntry` |
+| `widget_name` | `widget.widget_name()` | The `#name` selector value (`None` when unset) |
+| `css_classes` | `widget.css_classes()` | `.class` selector values |
+| `visible` | `widget.is_visible()` | **Computed** — effective visibility (parent AND child) |
+| `sensitive` | `widget.is_sensitive()` | **Computed** — effective sensitivity |
+| `bounds` | `widget.compute_bounds(window_root)` | **Computed** — post-layout window-local rect in CSS pixels; `None` when unrealized/unmapped |
+| `properties` | opt-in via `props=` | See below |
+| `children` | recursive | Capped by `maxDepth` |
+
+### Opt-in GObject property read-through (`props=`)
+
+Pass `props` to read named GObject properties off each matched widget
+in the same response:
+
+```ts
+const r = await client.elements({
+  selector: "#entry1",
+  props: ["text", "placeholder-text"],
+});
+// r.roots[0].properties → { "text": "hello", "placeholder-text": "..." }
+```
+
+Equivalent HTTP: `GET /test/elements?selector=%23entry1&props=text,placeholder-text`
+(comma-separated; repeated `props=` keys also accumulate).
+
+The read path is shared with `wait({ kind: "state_eq", property })`
+(`wait.rs::read_property_as_json`) — **MVP type coverage is
+`String` / `bool` / `i32` / `f64`**. Failure modes surface as sentinel
+objects under the requested key so the wire format stays a flat map:
+
+- `{"$missing": true}` — the widget exposes no such GObject property.
+- `{"$unsupported": "GdkRGBA"}` — the property exists but its value
+  type is outside the MVP set (enums, flags, boxed types, object
+  references; extend `read_property_as_json` to add coverage).
+
+When `props` is omitted (or empty) the `properties` field is **absent**
+from each node — the legacy response shape is preserved.
+
+**What `elements()` does *not* expose** (by design / GTK4 limit):
+
+- CSS computed style (color/font/padding actually applied) — GTK4 has
+  no public API for this; only the declared `css_classes` are
+  readable.
+- State flags (`GTK_STATE_FLAG_*`), accessible role/state — not in
+  `ElementInfo` today. Out-of-band: read individual GObject properties
+  with `props=`, or `wait({ kind: "state_eq", ... })` for a polling
+  read.
+
 ## Recording (MVP: X11)
 
 Local screen recording is driven by `ffmpeg` and tracked via a single PID
