@@ -1,6 +1,6 @@
 ---
 name: gtk4-e2e
-description: GTK4 + Rust アプリの e2e 自動操作・録画・scenario 実行スキル。Triggers - 「gtk4-e2e」「demo を tap」「画面を録画」「scenario を流す」「e2e で wait」「screenshot を保存」等の発言、または $XDG_RUNTIME_DIR/gtk4-e2e/instance-*.json が存在する前提の作業時。非対応 - Wayland 上での録画 (MVP では X11 のみ) / macOS でのキャプチャ。
+description: GTK4 + Rust アプリの e2e 自動操作・録画・scenario 実行スキル。Triggers - 「gtk4-e2e」「demo を tap」「画面を録画」「scenario を流す」「e2e で wait」「screenshot を保存」「widget の property を読む」「elements ツリーを取る」等の発言、または $XDG_RUNTIME_DIR/gtk4-e2e/instance-*.json が存在する前提の作業時。非対応 - Wayland 上での録画 (MVP では X11 のみ) / macOS でのキャプチャ。
 ---
 
 # gtk4-e2e: GTK4+Rust e2e 操作スキル
@@ -15,8 +15,10 @@ SDK は client-side で完結し、`packages/server` (Rust) が公開する
   など、実機 GUI への自動操作を求めたとき
 - `$XDG_RUNTIME_DIR/gtk4-e2e/instance-*.json` (Linux) /
   `$TMPDIR/gtk4-e2e/instance-*.json` (macOS) から利用可能な instance を選ぶとき
-- `bunx gtk4-e2e info | tap | screenshot | wait | record (start|stop|status) | events`
+- `bunx gtk4-e2e info | tap | screenshot | wait | elements | record (start|stop|status) | events`
   を呼ぶとき
+- widget の現在値 (`Entry.text` / `Switch.active` 等) を読み取って assertion
+  したい / アプリの現状を把握したいとき (→ `elements --props ...`)
 
 ## トリガー条件 (frontmatter description と重複)
 
@@ -45,6 +47,34 @@ bunx gtk4-e2e tap 100,200
 
 ```bash
 bunx gtk4-e2e screenshot /tmp/now.png
+```
+
+### elements (widget tree query)
+
+```bash
+# 全ウィンドウのツリーを JSON で
+bunx gtk4-e2e elements
+
+# 個別 widget に絞る
+bunx gtk4-e2e elements --selector "#entry1"
+
+# 各ノードの GObject property を opt-in で取得 (カンマ区切り)
+bunx gtk4-e2e elements --selector "#entry1" --props text,placeholder-text
+
+# 当該 widget が公開する全 readable property をダンプ
+bunx gtk4-e2e elements --selector "#entry1" --props '*'
+```
+
+`--props` で取れる値の型は MVP で `String / bool / i32 / f64`。それ以外
+(`GdkRGBA` 等 boxed や enum / flags) は `{"$unsupported": "GTypeName"}`、
+そもそも widget が公開していない property は `{"$missing": true}` という
+sentinel で返るので、`jq` で振り分けられる。GTK4 が public API を持たない
+CSS computed style と state flags は取れない (`css_classes` までは出る)。
+
+```bash
+# 例: Entry.text が "" でないことを確認
+bunx gtk4-e2e elements --selector "#entry1" --props text \
+  | jq -e '.roots[0].properties.text != ""'
 ```
 
 ### record (X11 only / MVP)

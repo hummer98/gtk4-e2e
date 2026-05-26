@@ -37,7 +37,7 @@ Subcommands:
   screenshot <out.png>                                 GET /test/screenshot → save to file
   screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
                   [--threshold <0.0-1.0>] [--update-baseline]
-  elements [--selector <s>] [--max-depth <n>]
+  elements [--selector <s>] [--max-depth <n>] [--props <names>]
                                     GET /test/elements → JSON tree to stdout
   record start --output <path>      start ffmpeg recording (X11 only in MVP)
   record stop                       stop the running recorder
@@ -54,6 +54,10 @@ Flags (apply to all subcommands):
   --duration <ms> swipe gesture duration in ms (default: 300)
   --selector <s>  selector for elements (e.g. #input1 or .primary)
   --max-depth <n> cap subtree depth for elements (0 = root only)
+  --props <names> comma-separated GObject property names to read per matched
+                  widget (elements). Pass '*' to dump every readable property
+                  on each match. Failure sentinels surface inline:
+                    { "$missing": true } | { "$unsupported": "GTypeName" }
   --verbose       inherit recorder stderr (record start)
   --help, -h      show this message
 `;
@@ -72,6 +76,7 @@ interface ParsedArgs {
     duration?: number;
     selector?: string;
     maxDepth?: number;
+    props?: string[];
     baseline?: string;
     updateBaseline: boolean;
     threshold?: number;
@@ -168,6 +173,22 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!Number.isFinite(n) || n < 0)
         throw new ArgvError(`--max-depth: not a non-negative integer: ${v}`);
       result.flags.maxDepth = n;
+      continue;
+    }
+    if (a === "--props") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--props requires a value");
+      // Comma-separated; mirrors the GET /test/elements?props= wire format.
+      // Empty segments (`--props ''`, `--props 'a,,b'`, trailing comma) are
+      // silently dropped so the user can compose without sentinel filtering.
+      const names = v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (names.length === 0) {
+        throw new ArgvError("--props requires at least one name (got empty list)");
+      }
+      result.flags.props = names;
       continue;
     }
     if (a === "--baseline") {
@@ -316,6 +337,7 @@ async function runElements(parsed: ParsedArgs): Promise<void> {
   const resp = await client.elements({
     selector: parsed.flags.selector,
     maxDepth: parsed.flags.maxDepth,
+    props: parsed.flags.props,
   });
   process.stdout.write(`${JSON.stringify(resp, null, 2)}\n`);
 }

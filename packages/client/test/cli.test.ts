@@ -820,6 +820,68 @@ describe("cli elements", () => {
     const result = await runCli(["elements", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(3);
   });
+
+  test("--props forwards comma-joined names as the props= query param", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(sampleResp);
+      },
+    });
+
+    const result = await runCli([
+      "elements",
+      "--selector",
+      "#input1",
+      "--props",
+      "text,placeholder-text",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(lastUrl?.searchParams.get("selector")).toBe("#input1");
+    expect(lastUrl?.searchParams.get("props")).toBe("text,placeholder-text");
+  });
+
+  test("--props '*' forwards the wildcard token verbatim", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(sampleResp);
+      },
+    });
+
+    const result = await runCli(["elements", "--props", "*", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(lastUrl?.searchParams.get("props")).toBe("*");
+  });
+
+  test("--props with empty / whitespace-only value exits 2 (argv error)", async () => {
+    mock = startMock({ elements: () => Response.json(sampleResp) });
+
+    const result = await runCli(["elements", "--props", " , , ", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("--props");
+  });
+
+  test("--props strips empty segments before forwarding", async () => {
+    mock = startMock({
+      elements: (url) => {
+        lastUrl = url;
+        return Response.json(sampleResp);
+      },
+    });
+
+    const result = await runCli([
+      "elements",
+      "--props",
+      "text,,placeholder-text,",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(lastUrl?.searchParams.get("props")).toBe("text,placeholder-text");
+  });
 });
 
 describe("cli error handling", () => {
