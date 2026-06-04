@@ -75,6 +75,7 @@ interface RouteHandlers {
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
+  wait?: (body: unknown) => Response | Promise<Response>;
 }
 
 function startMock(handlers: RouteHandlers): MockServer {
@@ -103,6 +104,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
+      if (url.pathname === "/test/wait" && handlers.wait) return handlers.wait(body);
       return new Response("not found", { status: 404 });
     },
   });
@@ -881,6 +883,205 @@ describe("cli elements", () => {
     ]);
     expect(result.exitCode).toBe(0);
     expect(lastUrl?.searchParams.get("props")).toBe("text,placeholder-text");
+  });
+});
+
+describe("cli wait", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("visible: sends selector_visible condition with default timeout", async () => {
+    mock = startMock({ wait: () => Response.json({ elapsed_ms: 12 }) });
+
+    const result = await runCli(["wait", "visible", "#btn1", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      condition: { kind: "selector_visible", selector: "#btn1" },
+      timeout_ms: 5000,
+    });
+    expect(JSON.parse(result.stdout)).toEqual({ elapsed_ms: 12 });
+  });
+
+  test("state-eq: JSON-parses the value (bool) and honors --timeout", async () => {
+    mock = startMock({ wait: () => Response.json({ elapsed_ms: 3 }) });
+
+    const result = await runCli([
+      "wait",
+      "state-eq",
+      "#sw",
+      "active",
+      "true",
+      "--timeout",
+      "1000",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      condition: { kind: "state_eq", selector: "#sw", property: "active", value: true },
+      timeout_ms: 1000,
+    });
+  });
+
+  test("state-eq: unparseable value falls back to a raw string", async () => {
+    mock = startMock({ wait: () => Response.json({ elapsed_ms: 1 }) });
+
+    const result = await runCli([
+      "wait",
+      "state-eq",
+      "#e",
+      "text",
+      "hello",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(
+      (mock.receivedBodies.at(-1)?.body as { condition: { value: unknown } }).condition.value,
+    ).toBe("hello");
+  });
+
+  test("app-state-eq: sends app_state_eq with JSON-Pointer path", async () => {
+    mock = startMock({ wait: () => Response.json({ elapsed_ms: 5 }) });
+
+    const result = await runCli([
+      "wait",
+      "app-state-eq",
+      "/counter",
+      "42",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      condition: { kind: "app_state_eq", path: "/counter", value: 42 },
+      timeout_ms: 5000,
+    });
+  });
+
+  test("408 from server → exit 8 (WaitTimeoutError)", async () => {
+    mock = startMock({
+      wait: () =>
+        new Response(JSON.stringify({ error: "timeout" }), {
+          status: 408,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const result = await runCli(["wait", "visible", "#never", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(8);
+  });
+
+  test("501 from server → exit 3 (NotImplementedError)", async () => {
+    mock = startMock({
+      wait: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "wait" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const result = await runCli(["wait", "visible", "#x", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(3);
+  });
+
+  test("missing condition → exit 2", async () => {
+    const result = await runCli(["wait"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("visible | state-eq | app-state-eq");
+  });
+
+  test("state-eq missing value → exit 2", async () => {
+    const result = await runCli(["wait", "state-eq", "#x", "active"]);
+    expect(result.exitCode).toBe(2);
+  });
+});
+
+interface MockWsServer {
+  port: number;
+  lastUpgradeUrl: () => URL | null;
+  stop(): Promise<void>;
+}
+
+// Sends `envelopes` to each client as soon as it connects, so a CLI consumer
+// with `--count` can collect a deterministic burst. Records the upgrade URL so
+// tests can assert the `?kinds=` filter.
+function startMockWs(envelopes: unknown[]): MockWsServer {
+  let lastUrl: URL | null = null;
+  const server = Bun.serve({
+    port: 0,
+    fetch(req, srv) {
+      lastUrl = new URL(req.url);
+      if (srv.upgrade(req)) return;
+      return new Response("ws only", { status: 426 });
+    },
+    websocket: {
+      open(ws) {
+        for (const env of envelopes) ws.send(JSON.stringify(env));
+      },
+      message() {},
+      close() {},
+    },
+  });
+  // Bun.serve(...).port is `number | undefined` for UDS support; we always
+  // bind a TCP port (port: 0), so it is guaranteed non-null at runtime.
+  return {
+    port: server.port!,
+    lastUpgradeUrl: () => lastUrl,
+    async stop() {
+      await server.stop(true);
+    },
+  };
+}
+
+describe("cli events", () => {
+  let mock: MockWsServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("--count N prints N NDJSON lines then exits 0", async () => {
+    const envs = [
+      { kind: "state_change", data: { a: 1 }, ts: "2026-01-01T00:00:00Z" },
+      { kind: "state_change", data: { a: 2 }, ts: "2026-01-01T00:00:01Z" },
+      { kind: "state_change", data: { a: 3 }, ts: "2026-01-01T00:00:02Z" },
+    ];
+    mock = startMockWs(envs);
+
+    const result = await runCli(["events", "--count", "2", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    const lines = result.stdout.trim().split("\n");
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0])).toEqual(envs[0]);
+    expect(JSON.parse(lines[1])).toEqual(envs[1]);
+  });
+
+  test("--kinds forwards the comma-joined filter as the ?kinds= query param", async () => {
+    mock = startMockWs([{ kind: "state_change", data: null, ts: "2026-01-01T00:00:00Z" }]);
+
+    const result = await runCli([
+      "events",
+      "--count",
+      "1",
+      "--kinds",
+      "state_change,log_line",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.lastUpgradeUrl()?.searchParams.get("kinds")).toBe("state_change,log_line");
+  });
+
+  test("--timeout caps the stream and exits 0 even with no events", async () => {
+    mock = startMockWs([]); // never sends anything
+
+    const result = await runCli(["events", "--timeout", "300", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe("");
   });
 });
 

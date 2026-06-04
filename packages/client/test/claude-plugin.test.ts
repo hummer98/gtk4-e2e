@@ -121,4 +121,10 @@ describe("claude-plugin: SKILL.md", () => {
     expect(text).toContain("bunx gtk4-e2e record");
     expect(text).toContain("bun test");
   });
+
+  test("body documents the wait and events subcommands", () => {
+    const text = readFileSync(skillPath, "utf8");
+    expect(text).toContain("bunx gtk4-e2e wait");
+    expect(text).toContain("bunx gtk4-e2e events");
+  });
 });

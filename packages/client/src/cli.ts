@@ -9,6 +9,8 @@
 //   5  HttpError
 //   6  RecorderError (Step 8)
 //   7  VisualDiffError (Step 19; baseline_missing or decode_failed)
+//   8  WaitTimeoutError (wait: condition not met before the deadline / HTTP 408)
+//   9  EventStreamError (events: initial open failed or reconnect budget spent)
 //
 // The argv parser is hand-rolled to avoid a dependency.
 
@@ -19,12 +21,15 @@ import { discover } from "./discover.ts";
 import {
   DiscoveryError,
   E2EError,
+  EventStreamError,
   HttpError,
   NotImplementedError,
   RecorderError,
   VisualDiffError,
+  WaitTimeoutError,
 } from "./errors.ts";
 import { Recorder } from "./recorder.ts";
+import type { EventKind, WaitCondition } from "./types.gen.ts";
 
 const USAGE = `gtk4-e2e <subcommand> [args] [flags]
 
@@ -39,6 +44,12 @@ Subcommands:
                   [--threshold <0.0-1.0>] [--update-baseline]
   elements [--selector <s>] [--max-depth <n>] [--props <names>]
                                     GET /test/elements → JSON tree to stdout
+  wait visible <selector>           POST /test/wait — long-poll until visible
+  wait state-eq <selector> <prop> <value>   long-poll until widget prop == value
+  wait app-state-eq <path> <value>          long-poll until app state == value
+                  [--timeout <ms>]  wait deadline (default 5000); 408 → exit 8
+  events [--kinds <k1,k2>] [--count <n>] [--timeout <ms>]
+                                    WS /test/events → one JSON envelope per line
   record start --output <path>      start ffmpeg recording (X11 only in MVP)
   record stop                       stop the running recorder
   record status                     print recorder status as JSON
@@ -58,6 +69,9 @@ Flags (apply to all subcommands):
                   widget (elements). Pass '*' to dump every readable property
                   on each match. Failure sentinels surface inline:
                     { "$missing": true } | { "$unsupported": "GTypeName" }
+  --timeout <ms>  wait deadline (default 5000) / events duration cap
+  --count <n>     events: stop after n envelopes (default: stream until killed)
+  --kinds <names> events: comma-separated EventKind filter (state_change,log_line)
   --verbose       inherit recorder stderr (record start)
   --help, -h      show this message
 `;
@@ -77,6 +91,9 @@ interface ParsedArgs {
     selector?: string;
     maxDepth?: number;
     props?: string[];
+    timeout?: number;
+    count?: number;
+    kinds?: EventKind[];
     baseline?: string;
     updateBaseline: boolean;
     threshold?: number;
@@ -189,6 +206,39 @@ function parseArgs(argv: string[]): ParsedArgs {
         throw new ArgvError("--props requires at least one name (got empty list)");
       }
       result.flags.props = names;
+      continue;
+    }
+    if (a === "--timeout") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--timeout requires a value");
+      const n = Number.parseInt(v, 10);
+      if (!Number.isFinite(n) || n <= 0)
+        throw new ArgvError(`--timeout: not a positive integer: ${v}`);
+      result.flags.timeout = n;
+      continue;
+    }
+    if (a === "--count") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--count requires a value");
+      const n = Number.parseInt(v, 10);
+      if (!Number.isFinite(n) || n <= 0)
+        throw new ArgvError(`--count: not a positive integer: ${v}`);
+      result.flags.count = n;
+      continue;
+    }
+    if (a === "--kinds") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--kinds requires a value");
+      // Comma-separated EventKind filter; mirrors the WS ?kinds= wire format.
+      // Empty segments are dropped (same forgiving split as --props).
+      const names = v
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0);
+      if (names.length === 0) {
+        throw new ArgvError("--kinds requires at least one name (got empty list)");
+      }
+      result.flags.kinds = names as EventKind[];
       continue;
     }
     if (a === "--baseline") {
@@ -342,6 +392,89 @@ async function runElements(parsed: ParsedArgs): Promise<void> {
   process.stdout.write(`${JSON.stringify(resp, null, 2)}\n`);
 }
 
+// `value` positionals are JSON when parseable (so `true` / `42` / `"x"` /
+// `{"a":1}` round-trip to their real types) and fall back to the raw string
+// otherwise (so `hello` doesn't need shell-escaped quotes). `WaitCondition`
+// values are `unknown`, so either shape is wire-valid.
+function parseJsonOrString(arg: string): unknown {
+  try {
+    return JSON.parse(arg);
+  } catch {
+    return arg;
+  }
+}
+
+function buildWaitCondition(parsed: ParsedArgs): WaitCondition {
+  const action = parsed.positional[0];
+  switch (action) {
+    case "visible": {
+      const selector = parsed.positional[1];
+      if (selector === undefined) throw new ArgvError("wait visible requires <selector>");
+      return { kind: "selector_visible", selector };
+    }
+    case "state-eq": {
+      const [, selector, property, value] = parsed.positional;
+      if (selector === undefined || property === undefined || value === undefined) {
+        throw new ArgvError("wait state-eq requires <selector> <property> <value>");
+      }
+      return { kind: "state_eq", selector, property, value: parseJsonOrString(value) };
+    }
+    case "app-state-eq": {
+      const [, path, value] = parsed.positional;
+      if (path === undefined || value === undefined) {
+        throw new ArgvError("wait app-state-eq requires <path> <value>");
+      }
+      return { kind: "app_state_eq", path, value: parseJsonOrString(value) };
+    }
+    case undefined:
+      throw new ArgvError("wait requires a condition: visible | state-eq | app-state-eq");
+    default:
+      throw new ArgvError(
+        `unknown wait condition: ${action} (expected visible | state-eq | app-state-eq)`,
+      );
+  }
+}
+
+async function runWait(parsed: ParsedArgs): Promise<void> {
+  const condition = buildWaitCondition(parsed);
+  const client = await buildClient(parsed);
+  const result = await client.wait(condition, { timeoutMs: parsed.flags.timeout });
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+async function runEvents(parsed: ParsedArgs): Promise<void> {
+  const client = await buildClient(parsed);
+  // `--timeout` caps the stream by aborting the underlying socket; the SDK
+  // treats an aborted signal as a clean end-of-iteration (not an error), so
+  // we exit 0 with whatever arrived. SIGINT/SIGTERM map to the same abort.
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  if (parsed.flags.timeout !== undefined) {
+    timer = setTimeout(() => controller.abort(), parsed.flags.timeout);
+  }
+  const onSignal = () => controller.abort();
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+
+  const limit = parsed.flags.count;
+  let seen = 0;
+  try {
+    const stream = await client.events({ kinds: parsed.flags.kinds, signal: controller.signal });
+    for await (const env of stream) {
+      // NDJSON: one compact envelope per line so downstream `jq -c` / `read`
+      // loops can consume the stream incrementally.
+      process.stdout.write(`${JSON.stringify(env)}\n`);
+      seen += 1;
+      if (limit !== undefined && seen >= limit) break;
+    }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    controller.abort();
+    process.off("SIGINT", onSignal);
+    process.off("SIGTERM", onSignal);
+  }
+}
+
 async function runScreenshot(parsed: ParsedArgs): Promise<number> {
   if (parsed.positional.length === 0) {
     throw new ArgvError("screenshot requires <out.png> or <name> --baseline <path>");
@@ -477,6 +610,12 @@ async function main(argv: string[]): Promise<number> {
       case "elements":
         await runElements(parsed);
         return 0;
+      case "wait":
+        await runWait(parsed);
+        return 0;
+      case "events":
+        await runEvents(parsed);
+        return 0;
       case "record":
         return await runRecord(parsed);
       default:
@@ -507,6 +646,14 @@ async function main(argv: string[]): Promise<number> {
     if (err instanceof VisualDiffError) {
       process.stderr.write(`${err.message}\n`);
       return 7;
+    }
+    if (err instanceof WaitTimeoutError) {
+      process.stderr.write(`${err.message}\n`);
+      return 8;
+    }
+    if (err instanceof EventStreamError) {
+      process.stderr.write(`${err.message}\n`);
+      return 9;
     }
     if (err instanceof E2EError) {
       process.stderr.write(`${err.message}\n`);
