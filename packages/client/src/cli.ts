@@ -37,6 +37,7 @@ Subcommands:
   info                              GET /test/info → JSON to stdout
   tap <selector|x,y>                POST /test/tap
   type <selector> <text>            POST /test/type
+  focus <selector>                  POST /test/focus (grab_focus → :focus CSS)
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
   screenshot <out.png>                                 GET /test/screenshot → save to file
@@ -344,6 +345,15 @@ async function runType(parsed: ParsedArgs): Promise<void> {
   await client.type(selector, text);
 }
 
+async function runFocus(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 1) {
+    throw new ArgvError("focus requires <selector>");
+  }
+  const [selector] = parsed.positional;
+  const client = await buildClient(parsed);
+  await client.focus(selector);
+}
+
 function parseSwipeXY(arg: string): { x: number; y: number } {
   if (!/^\d+,\d+$/.test(arg)) {
     throw new ArgvError(`swipe: expected non-negative "x,y", got: ${arg}`);
@@ -598,6 +608,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "type":
         await runType(parsed);
+        return 0;
+      case "focus":
+        await runFocus(parsed);
         return 0;
       case "swipe":
         await runSwipe(parsed);

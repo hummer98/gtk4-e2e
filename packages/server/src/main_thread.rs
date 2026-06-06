@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
-use crate::input::{PinchError, SwipeError, TapError, TypeError};
-use crate::proto::{ElementsResponse, TapTarget, TypeRequest, WaitCondition, XY};
+use crate::input::{FocusError, PinchError, SwipeError, TapError, TypeError};
+use crate::proto::{ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
@@ -73,6 +73,11 @@ pub enum MainCmd {
     Type {
         request: TypeRequest,
         reply: oneshot::Sender<Result<(), TypeError>>,
+    },
+    /// Move keyboard focus to a widget via `grab_focus()` (issue #3).
+    Focus {
+        request: FocusRequest,
+        reply: oneshot::Sender<Result<(), FocusError>>,
     },
     /// Synthesize a swipe over `duration_ms` (T014, plan §5.4).
     Swipe {
@@ -163,6 +168,11 @@ fn handle_cmd(cmd: MainCmd) {
         MainCmd::Type { request, reply } => {
             let outcome = with_app(|app| crate::wait::dispatch_type(app, &request))
                 .unwrap_or(Err(TypeError::NoActiveWindow));
+            let _ = reply.send(outcome);
+        }
+        MainCmd::Focus { request, reply } => {
+            let outcome = with_app(|app| crate::wait::dispatch_focus(app, &request))
+                .unwrap_or(Err(FocusError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
         MainCmd::Swipe {

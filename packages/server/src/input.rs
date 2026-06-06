@@ -240,6 +240,84 @@ pub fn type_text(
 }
 
 // ---------------------------------------------------------------------------
+// Focus (issue #3)
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the `focus` pipeline (issue #3).
+///
+/// Mapped to HTTP status codes in `http.rs` (mirror of `TypeError`):
+///
+/// | error              | http |
+/// |--------------------|------|
+/// | `SelectorNotFound` | 404  |
+/// | `FocusRejected`    | 422  |
+/// | `WidgetNotVisible` | 422  |
+/// | `WidgetDisabled`   | 422  |
+/// | `NoActiveWindow`   | 422  |
+#[derive(Debug, Clone, PartialEq)]
+pub enum FocusError {
+    SelectorNotFound { selector: String },
+    FocusRejected { selector: Option<String> },
+    WidgetNotVisible { selector: Option<String> },
+    WidgetDisabled { selector: Option<String> },
+    NoActiveWindow,
+}
+
+impl std::fmt::Display for FocusError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FocusError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            FocusError::FocusRejected { selector } => match selector {
+                Some(s) => write!(f, "focus_rejected: {s}"),
+                None => write!(f, "focus_rejected"),
+            },
+            FocusError::WidgetNotVisible { selector } => match selector {
+                Some(s) => write!(f, "widget_not_visible: {s}"),
+                None => write!(f, "widget_not_visible"),
+            },
+            FocusError::WidgetDisabled { selector } => match selector {
+                Some(s) => write!(f, "widget_disabled: {s}"),
+                None => write!(f, "widget_disabled"),
+            },
+            FocusError::NoActiveWindow => write!(f, "no_active_window"),
+        }
+    }
+}
+
+impl std::error::Error for FocusError {}
+
+/// Move keyboard focus to `widget` via `grab_focus()`, enabling `:focus` /
+/// `:focus-within` dependent CSS to render for deterministic screenshot
+/// verification (issue #3).
+///
+/// Visibility and sensitivity guards run before the grab so the error surface
+/// matches `tap_widget` / `type_text`. `grab_focus()` returns `false` when the
+/// widget cannot take focus (e.g. a `Label`, or a widget with
+/// `can_focus == false`); that becomes `FocusRejected` (422) rather than a
+/// silent no-op, so callers learn the target is not focusable.
+pub fn focus_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), FocusError> {
+    if !widget.is_visible() || !widget.is_mapped() {
+        return Err(FocusError::WidgetNotVisible {
+            selector: selector.map(str::to_string),
+        });
+    }
+    if !widget.is_sensitive() {
+        return Err(FocusError::WidgetDisabled {
+            selector: selector.map(str::to_string),
+        });
+    }
+    if widget.grab_focus() {
+        Ok(())
+    } else {
+        Err(FocusError::FocusRejected {
+            selector: selector.map(str::to_string),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Swipe (T014, plan §4)
 // ---------------------------------------------------------------------------
 

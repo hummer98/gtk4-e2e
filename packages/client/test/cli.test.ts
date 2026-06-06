@@ -72,6 +72,7 @@ interface RouteHandlers {
   info?: () => Response | Promise<Response>;
   tap?: (body: unknown) => Response | Promise<Response>;
   type?: (body: unknown) => Response | Promise<Response>;
+  focus?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
@@ -101,6 +102,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/info" && handlers.info) return handlers.info();
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
+      if (url.pathname === "/test/focus" && handlers.focus) return handlers.focus(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
@@ -271,6 +273,35 @@ describe("cli type", () => {
     });
 
     const result = await runCli(["type", "#input1", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+});
+
+describe("cli focus", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector} as POST /test/focus body", async () => {
+    mock = startMock({
+      focus: () => new Response(null, { status: 200 }),
+    });
+
+    const result = await runCli(["focus", "#input1", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.path).toBe("/test/focus");
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({ selector: "#input1" });
+  });
+
+  test("missing selector argument exits 2", async () => {
+    mock = startMock({
+      focus: () => new Response(null, { status: 200 }),
+    });
+
+    const result = await runCli(["focus", "--port", String(mock.port)]);
     expect(result.exitCode).toBe(2);
     expect(result.stderr.length).toBeGreaterThan(0);
   });

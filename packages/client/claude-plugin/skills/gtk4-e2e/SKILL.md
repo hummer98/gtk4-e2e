@@ -15,7 +15,7 @@ SDK は client-side で完結し、`packages/server` (Rust) が公開する
   など、実機 GUI への自動操作を求めたとき
 - `$XDG_RUNTIME_DIR/gtk4-e2e/instance-*.json` (Linux) /
   `$TMPDIR/gtk4-e2e/instance-*.json` (macOS) から利用可能な instance を選ぶとき
-- `bunx gtk4-e2e info | tap | type | swipe | pinch | screenshot | elements | wait | events | record (start|stop|status)`
+- `bunx gtk4-e2e info | tap | type | focus | swipe | pinch | screenshot | elements | wait | events | record (start|stop|status)`
   を呼ぶとき
 - widget の現在値 (`Entry.text` / `Switch.active` 等) を読み取って assertion
   したい / アプリの現状を把握したいとき (→ `elements --props ...`)
@@ -47,17 +47,24 @@ bunx gtk4-e2e tap "#submit"
 bunx gtk4-e2e tap 100,200
 ```
 
-### type / swipe / pinch
+### type / focus / swipe / pinch
 
 ```bash
 # selector に文字入力
 bunx gtk4-e2e type "#entry1" "hello"
+# selector に keyboard focus を当てる (grab_focus)
+bunx gtk4-e2e focus "#entry1"
 # swipe (window-local 座標, 既定 duration 300ms / --duration で変更)
 bunx gtk4-e2e swipe 100,400 100,100
 bunx gtk4-e2e swipe 100,400 100,100 --duration 500
 # pinch (中心座標 + scale, 既定 duration 300ms)
 bunx gtk4-e2e pinch 200,200 2.0
 ```
+
+`focus` は `:focus` / `:focus-within` 依存の CSS (フォーカスリング, accent
+border 等) を screenshot で決定論的に検証したいときに使う。`focus → screenshot`
+と合成する。focus を取れない widget (Label 等) は **422 focus_rejected**、
+非表示/無効は widget_not_visible / widget_disabled、未一致は 404。
 
 ### screenshot (保存)
 

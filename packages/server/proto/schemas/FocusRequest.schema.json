@@ -1,0 +1,15 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Body of `POST /test/focus` (issue #3).\n\nSelector-only — mirrors `TypeRequest` minus `text`. The server resolves the widget and calls `grab_focus()` so `:focus` / `:focus-within` dependent CSS renders for screenshot verification.",
+  "properties": {
+    "selector": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "selector"
+  ],
+  "title": "FocusRequest",
+  "type": "object"
+}

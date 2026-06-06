@@ -41,6 +41,7 @@ pub enum Capability {
     Elements,
     State,
     Pinch,
+    Focus,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -72,6 +73,16 @@ pub enum TapTarget {
 pub struct TypeRequest {
     pub selector: String,
     pub text: String,
+}
+
+/// Body of `POST /test/focus` (issue #3).
+///
+/// Selector-only — mirrors `TypeRequest` minus `text`. The server resolves the
+/// widget and calls `grab_focus()` so `:focus` / `:focus-within` dependent CSS
+/// renders for screenshot verification.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct FocusRequest {
+    pub selector: String,
 }
 
 /// Body of `POST /test/wait`.
