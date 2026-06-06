@@ -41,6 +41,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Elements,
             Capability::State,
             Capability::Pinch,
+            Capability::Focus,
         ],
         token_required: None,
     });
@@ -658,8 +659,9 @@ async fn type_capability_in_info() {
             "elements",
             "state",
             "pinch",
+            "focus",
         ],
-        "capabilities order must include type, swipe, elements, state, and pinch at the tail"
+        "capabilities order must include type, swipe, elements, state, pinch, and focus at the tail"
     );
 }
 
@@ -748,6 +750,191 @@ async fn type_selector_not_found_404() {
     assert_eq!(
         v.get("error").and_then(Value::as_str),
         Some("selector_not_found")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- issue #3: focus capability -----
+
+#[tokio::test]
+async fn focus_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/focus")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn focus_invalid_selector_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/focus")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"!!bad\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_selector")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn focus_endpoint_returns_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-focus-ok")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let entry = gtk::Entry::builder().build();
+    entry.set_widget_name("input1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&entry)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/focus")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"#input1\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(entry.has_focus(), "entry should hold keyboard focus");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn focus_selector_not_found_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-focus-404")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/focus")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"#nosuch\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("selector_not_found")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn focus_rejected_422() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-focus-422")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    // A plain Label cannot take keyboard focus → grab_focus() returns false.
+    let label = gtk::Label::new(Some("plain"));
+    label.set_widget_name("label1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&label)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/focus")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"#label1\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("focus_rejected")
     );
 
     window.close();

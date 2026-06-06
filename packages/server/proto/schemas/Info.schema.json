@@ -14,7 +14,8 @@
         "swipe",
         "elements",
         "state",
-        "pinch"
+        "pinch",
+        "focus"
       ],
       "type": "string"
     }

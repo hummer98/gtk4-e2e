@@ -15,10 +15,11 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
 use crate::input::{
-    resolve_xy, tap_widget, type_text, PinchError, SwipeError, TapError, TypeError,
+    focus_widget, resolve_xy, tap_widget, type_text, FocusError, PinchError, SwipeError, TapError,
+    TypeError,
 };
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
-use crate::proto::{TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
+use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
 use crate::state::AppDefinedState;
 use crate::tree::{find_first, parse_selector, GtkTree, WidgetTree};
 
@@ -182,6 +183,30 @@ pub(crate) fn dispatch_type(
         selector: req.selector.clone(),
     })?;
     type_text(&widget, &req.text, Some(&req.selector))
+}
+
+/// GTK-bound entry point for `MainCmd::Focus` (issue #3).
+///
+/// Mirror of `dispatch_type`: parse selector, resolve via `GtkTree`, then run
+/// the visibility / sensitivity / focusability checks inside `focus_widget`.
+/// Selector-only — no xy variant.
+pub(crate) fn dispatch_focus(
+    app: &crate::gtk::Application,
+    req: &FocusRequest,
+) -> Result<(), FocusError> {
+    // The HTTP layer pre-validates the selector and returns 422
+    // `invalid_selector` before reaching this dispatch (see
+    // `http.rs::post_focus`). The `map_err` below is defensive, mirroring
+    // `dispatch_type`: surface a bypassed parse error as `SelectorNotFound`
+    // (404) rather than panic.
+    let sel = parse_selector(&req.selector).map_err(|e| FocusError::SelectorNotFound {
+        selector: format!("{}: {}", req.selector, e.reason),
+    })?;
+    let tree = GtkTree { app };
+    let widget = find_first(tree, &sel).ok_or_else(|| FocusError::SelectorNotFound {
+        selector: req.selector.clone(),
+    })?;
+    focus_widget(&widget, Some(&req.selector))
 }
 
 /// GTK-bound entry point for `MainCmd::Swipe`. Plan T014 §5.4: validates

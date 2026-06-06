@@ -179,6 +179,7 @@ mod start_impl {
                 Capability::Elements,
                 Capability::State,
                 Capability::Pinch,
+                Capability::Focus,
             ],
             token_required: token.as_ref().map(|_| true),
         });

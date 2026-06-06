@@ -32,6 +32,7 @@ interface RouteHandlers {
   info?: () => Response | Promise<Response>;
   tap?: (body: unknown) => Response | Promise<Response>;
   type?: (body: unknown) => Response | Promise<Response>;
+  focus?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
@@ -61,6 +62,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/info" && handlers.info) return handlers.info();
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
+      if (url.pathname === "/test/focus" && handlers.focus) return handlers.focus(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
@@ -274,6 +276,65 @@ describe("E2EClient.type", () => {
     await expect(client.type("#x", "y")).rejects.toMatchObject({
       name: "NotImplementedError",
       capability: "type",
+      status: 501,
+    });
+  });
+});
+
+describe("E2EClient.focus", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector} as POST /test/focus body", async () => {
+    mock = startMock({
+      focus: () => new Response(null, { status: 200 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.focus("#input1");
+
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.method).toBe("POST");
+    expect(last?.path).toBe("/test/focus");
+    expect(last?.body).toEqual({ selector: "#input1" });
+  });
+
+  test("throws HttpError on 422 focus_rejected", async () => {
+    mock = startMock({
+      focus: () =>
+        new Response(JSON.stringify({ error: "focus_rejected", selector: "#label1" }), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.focus("#label1");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(422);
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      focus: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "focus" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await expect(client.focus("#x")).rejects.toMatchObject({
+      name: "NotImplementedError",
+      capability: "focus",
       status: 501,
     });
   });

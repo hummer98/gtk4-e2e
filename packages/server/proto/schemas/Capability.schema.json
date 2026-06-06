@@ -12,7 +12,8 @@
     "swipe",
     "elements",
     "state",
-    "pinch"
+    "pinch",
+    "focus"
   ],
   "title": "Capability",
   "type": "string"

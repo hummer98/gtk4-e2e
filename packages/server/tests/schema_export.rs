@@ -101,8 +101,8 @@ fn capability_enum_order_is_anchored() {
     // Plan §Q5 / Step 9: Capability ordering must match the surfaced order.
     // Step 7 anchored Events at the tail; Step 9 appends Type (T013) and
     // Swipe (T014) after Events. Step 14 appends Elements (T018);
-    // T019 appends State for `GET /test/state`. Step 9 (c) appends Pinch (T015)
-    // at the tail.
+    // T019 appends State for `GET /test/state`. Step 9 (c) appends Pinch (T015);
+    // issue #3 appends Focus for `POST /test/focus` at the tail.
     let tmp = tempfile::tempdir().unwrap();
     write_schemas(tmp.path()).unwrap();
 
@@ -126,6 +126,7 @@ fn capability_enum_order_is_anchored() {
             "elements",
             "state",
             "pinch",
+            "focus",
         ],
         "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements, state, pinch]"
     );

@@ -13,8 +13,8 @@ use schemars::{schema_for, JsonSchema};
 use serde_json::Value;
 
 use crate::proto::{
-    Bounds, Capability, ElementInfo, ElementsResponse, EventEnvelope, EventKind, Info,
-    PinchRequest, PropertyEventData, SwipeRequest, TapTarget, TypeRequest, WaitCondition,
+    Bounds, Capability, ElementInfo, ElementsResponse, EventEnvelope, EventKind, FocusRequest,
+    Info, PinchRequest, PropertyEventData, SwipeRequest, TapTarget, TypeRequest, WaitCondition,
     WaitRequest, WaitResult,
 };
 
@@ -30,6 +30,7 @@ pub fn write_schemas(out_dir: &Path) -> io::Result<()> {
     write_one::<Capability>(out_dir, "Capability")?;
     write_one::<TapTarget>(out_dir, "TapTarget")?;
     write_one::<TypeRequest>(out_dir, "TypeRequest")?;
+    write_one::<FocusRequest>(out_dir, "FocusRequest")?;
     write_one::<SwipeRequest>(out_dir, "SwipeRequest")?;
     write_one::<PinchRequest>(out_dir, "PinchRequest")?;
     write_one::<WaitRequest>(out_dir, "WaitRequest")?;

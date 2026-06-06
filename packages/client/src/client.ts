@@ -24,6 +24,7 @@ import {
 import { type EventStream, type EventsOptions, openEventStream } from "./events.ts";
 import type {
   ElementsResponse,
+  FocusRequest,
   Info,
   PinchRequest,
   TapTarget,
@@ -156,6 +157,28 @@ export class E2EClient {
       path: "/test/type",
       body,
       capability: "type",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Move keyboard focus to the widget matched by `selector` via `grab_focus()`,
+   * so `:focus` / `:focus-within` dependent CSS (focus ring, accent border)
+   * renders for deterministic screenshot verification (issue #3).
+   *
+   * Errors:
+   *   - 404 selector_not_found    — no widget matches `selector`
+   *   - 422 focus_rejected        — the widget cannot take focus (e.g. a Label)
+   *   - 422 widget_not_visible / widget_disabled / invalid_selector / no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async focus(selector: string): Promise<void> {
+    const body: FocusRequest = { selector };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/focus",
+      body,
+      capability: "focus",
       expect: "void",
     });
   }

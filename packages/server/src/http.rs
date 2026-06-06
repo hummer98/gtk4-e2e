@@ -1,7 +1,8 @@
 //! HTTP layer (axum).
 //!
 //! Routes (plan §Q11 / §Q4 Step 6 / Step 9 — T013 adds /test/type, T014 adds
-//! /test/swipe, T015 adds /test/pinch, T018 adds /test/elements):
+//! /test/swipe, T015 adds /test/pinch, T018 adds /test/elements, issue #3 adds
+//! /test/focus):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
@@ -12,6 +13,7 @@
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/focus`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/elements`     | GET    | 200     | 422 / 500 |
 //! | (any unknown)        | *      | —       | 501 (axum fallback) |
 //!
@@ -35,10 +37,11 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::elements::ElementsError;
-use crate::input::{PinchError, SwipeError, TapError, TypeError};
+use crate::input::{FocusError, PinchError, SwipeError, TapError, TypeError};
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{
-    EventEnvelope, Info, PinchRequest, SwipeRequest, TapTarget, TypeRequest, WaitRequest,
+    EventEnvelope, FocusRequest, Info, PinchRequest, SwipeRequest, TapTarget, TypeRequest,
+    WaitRequest,
 };
 use crate::snapshot::ScreenshotError;
 use crate::state::AppDefinedState;
@@ -68,6 +71,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
+        .route("/test/focus", post(post_focus))
         .route("/test/elements", get(get_elements))
         .route("/test/events", get(crate::ws::ws_events))
         .route("/test/state", get(get_state))
@@ -401,6 +405,60 @@ fn type_error_response(e: TypeError) -> Response {
             validation_error("widget_disabled", json!({ "selector": selector }))
         }
         TypeError::NoActiveWindow => validation_error("no_active_window", json!({})),
+    }
+}
+
+async fn post_focus(State(state): State<AppState>, body: String) -> Response {
+    let req: FocusRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    // Pre-validate selector before crossing into the GLib main thread, so the
+    // parser error becomes 422 invalid_selector rather than 404. Mirror of
+    // `post_type`; `dispatch_focus` defends against bypass with a 404 fallback.
+    if let Err(e) = parse_selector(&req.selector) {
+        return validation_error("invalid_selector", json!({"reason": e.reason}));
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Focus {
+            request: req,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    let outcome = match rx.await {
+        Ok(o) => o,
+        Err(_) => return server_error("main_thread reply dropped"),
+    };
+    match outcome {
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e) => focus_error_response(e),
+    }
+}
+
+fn focus_error_response(e: FocusError) -> Response {
+    match e {
+        FocusError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        FocusError::FocusRejected { selector } => {
+            validation_error("focus_rejected", json!({ "selector": selector }))
+        }
+        FocusError::WidgetNotVisible { selector } => {
+            validation_error("widget_not_visible", json!({ "selector": selector }))
+        }
+        FocusError::WidgetDisabled { selector } => {
+            validation_error("widget_disabled", json!({ "selector": selector }))
+        }
+        FocusError::NoActiveWindow => validation_error("no_active_window", json!({})),
     }
 }
 
