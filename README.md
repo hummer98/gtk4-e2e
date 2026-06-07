@@ -26,6 +26,24 @@ Originally proposed inside the Brainship project (private), this framework was e
 
 **Round 4 quick-win cleanup complete** (Step 0–21 + ADR-0002 promoted to Accepted, ADR governance documented). Per-round status reports live under [`docs/reports/`](docs/reports/) — see [`docs/reports/README.md`](docs/reports/README.md) for the index, [`docs/seed.md`](docs/seed.md) for the initial Claude Code scaffolding instructions, and [`docs/adr/`](docs/adr/) for architectural decisions.
 
+## Capabilities
+
+Each capability is advertised in `GET /test/info` and exposed both as an HTTP/WebSocket endpoint and a CLI subcommand. The SDK (`E2EClient`) has one method per capability; full CLI usage is in `bunx gtk4-e2e --help` and the [SKILL](packages/client/claude-plugin/skills/gtk4-e2e/SKILL.md).
+
+| Capability | Endpoint | CLI | Purpose |
+|---|---|---|---|
+| `info`       | `GET /test/info`        | `info`                       | Instance metadata + advertised capabilities |
+| `tap`        | `POST /test/tap`        | `tap <selector\|x,y>`        | Click/activate a widget (Button / Switch / CheckButton / ToggleButton) |
+| `type`       | `POST /test/type`       | `type <selector> <text>`     | Replace text content of an Editable / TextView |
+| `focus`      | `POST /test/focus`      | `focus <selector>`           | `grab_focus()` a widget so `:focus` / `:focus-within` CSS renders for screenshot checks |
+| `swipe`      | `POST /test/swipe`      | `swipe <x1,y1> <x2,y2>`      | Animate a scroll gesture over the nearest `ScrolledWindow` |
+| `pinch`      | `POST /test/pinch`      | `pinch <x,y> <scale>`        | Drive a `GestureZoom` (zoom in/out) |
+| `screenshot` | `GET /test/screenshot`  | `screenshot <out\|--baseline>` | Capture the active window as PNG / visual-regression diff |
+| `elements`   | `GET /test/elements`    | `elements [--selector …]`    | Walk the widget tree (+ opt-in GObject property read) |
+| `wait`       | `POST /test/wait`       | `wait visible\|state-eq\|app-state-eq` | Long-poll until a condition holds |
+| `events`     | `WS /test/events`       | `events`                     | Subscribe to a state-change / property / log NDJSON stream |
+| `state`      | `GET /test/state`       | —                            | App-defined state snapshot (read by `wait app-state-eq`) |
+
 ## Quick start
 
 Launch the demo GTK4 app with the in-process e2e server enabled:
