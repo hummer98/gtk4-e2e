@@ -8,7 +8,7 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry,
-    GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Stack, Switch, ToggleButton,
+    GestureZoom, Label, ListBox, Orientation, Popover, ScrolledWindow, Stack, Switch, ToggleButton,
 };
 #[cfg(feature = "e2e")]
 use serde_json::{json, Value};
@@ -255,6 +255,27 @@ fn build_ui(
     mode_stack.add_named(&mode1_page, Some("mode1"));
     mode_stack.add_named(&mode2_page, Some("mode2"));
 
+    // ADR-0004: a Button that opens a Popover. The popover content lives on
+    // its own GdkSurface (Wayland xdg_popup / X11 override-redirect), so its
+    // widget bounds have no common coordinate space with the window. This
+    // drives the cross-surface bounds composition path in `GET /test/elements`
+    // (`basis = popup_composed`). A plain Button (not MenuButton) is used so
+    // scenarios can `tap("#popover-btn")` to open it — the input layer rejects
+    // GtkMenuButton. It is appended near the top of the vbox (see below); the
+    // popover starts closed, so it does not appear in the main-window baseline
+    // frame, but its trigger shifts the baseline layout (m5 / R7 — baseline
+    // regenerated).
+    let popover_label = Label::new(Some("popover body text"));
+    popover_label.set_widget_name("popover-content");
+    let popover = Popover::builder().child(&popover_label).build();
+    let popover_btn = Button::with_label("Popover");
+    popover_btn.set_widget_name("popover-btn");
+    popover.set_parent(&popover_btn);
+    {
+        let popover = popover.clone();
+        popover_btn.connect_clicked(move |_| popover.popup());
+    }
+
     let mode_toggle = Button::with_label("Toggle mode");
     mode_toggle.set_widget_name("mode-toggle");
     {
@@ -304,6 +325,10 @@ fn build_ui(
         .build();
     vbox.append(&entry);
     vbox.append(&input1);
+    // Near the top so the popover opens within the visible screen area: the
+    // window is taller than the CI xvfb screen (1280x720), so a bottom-anchored
+    // popover would be positioned off-screen (negative coords / zero size).
+    vbox.append(&popover_btn);
     vbox.append(&button);
     vbox.append(&label);
     vbox.append(&switch1);

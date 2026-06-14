@@ -305,6 +305,202 @@ fn props_wildcard_enumerates_readable_gobject_properties() {
     common::pump_glib(32);
 }
 
+// ---------------------------------------------------------------------------
+// Popover (cross-surface) bounds — ADR-0004. The popover content lives on its
+// own GdkSurface (xdg_popup); these tests prove `compute_widget_bounds`
+// composes it back into the parent-window coordinate space (basis =
+// PopupComposed) and that same-surface widgets are unchanged (basis = None).
+// ---------------------------------------------------------------------------
+
+/// Window > vbox > [Button#popover-btn (parent of Popover with content
+/// Label#popover-content), Label#anchor-probe]. Returns the window and the
+/// popover so the caller can `popup()` it. Mirrors the demo wiring.
+fn build_popover_fixture() -> (gtk::Application, gtk::ApplicationWindow, gtk::Popover) {
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.popover-test")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+
+    let content = gtk::Label::new(Some("popover body text"));
+    content.set_widget_name("popover-content");
+    let popover = gtk::Popover::builder().child(&content).build();
+
+    let popover_btn = gtk::Button::with_label("Open");
+    popover_btn.set_widget_name("popover-btn");
+    popover.set_parent(&popover_btn);
+
+    let probe = gtk::Label::new(Some("probe"));
+    probe.set_widget_name("anchor-probe");
+
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&popover_btn);
+    vbox.append(&probe);
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .default_width(360)
+        .default_height(300)
+        .child(&vbox)
+        .build();
+    window.present();
+    common::pump_glib(128);
+    (app, window, popover)
+}
+
+/// Open the popover and pump until its surface is mapped.
+fn open_popover(popover: &gtk::Popover) {
+    popover.popup();
+    common::pump_glib(128);
+    common::pump_glib_for(std::time::Duration::from_millis(200));
+}
+
+/// Find the (single) `#popover-content` node anywhere in the response roots.
+fn find_node<'a>(
+    roots: &'a [gtk4_e2e_server::proto::ElementInfo],
+    name: &str,
+) -> Option<&'a gtk4_e2e_server::proto::ElementInfo> {
+    for r in roots {
+        if r.widget_name.as_deref() == Some(name) {
+            return Some(r);
+        }
+        if let Some(hit) = find_node(&r.children, name) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+#[test]
+fn popover_content_bounds_are_composed_in_window_space() {
+    if !require_display() {
+        return;
+    }
+    let (app, window, popover) = build_popover_fixture();
+    open_popover(&popover);
+
+    // Window root bounds (self-relative) = (0,0,W,H).
+    let root_resp = walk_elements(&app, None, None, &[]).expect("walk ok");
+    let root = &root_resp.roots[0];
+    let root_b = root.bounds.expect("window has bounds");
+    let (win_w, win_h) = (root_b.width, root_b.height);
+    eprintln!("[measure] window WxH = {win_w} x {win_h}");
+
+    let resp = walk_elements(&app, Some("#popover-content"), None, &[]).expect("walk ok");
+    let node = find_node(&resp.roots, "popover-content").expect("popover-content found");
+    let b = node
+        .bounds
+        .unwrap_or_else(|| panic!("popover content must have composed bounds; node = {node:?}"));
+    eprintln!("[measure] popover-content bounds = {b:?}");
+
+    // basis must mark this as cross-surface composed.
+    assert_eq!(
+        b.basis,
+        Some(gtk4_e2e_server::proto::BoundsBasis::PopupComposed),
+        "popover content bounds must carry basis=popup_composed"
+    );
+
+    // All four corners inside the parent window rectangle (AC2). On real
+    // compositors xdg_popup is constrained on-screen, so a happy-path popover
+    // is in-window; a sign error in (B)/(D) would push a corner out.
+    assert!(b.x >= 0.0, "x>=0, got {}", b.x);
+    assert!(b.y >= 0.0, "y>=0, got {}", b.y);
+    assert!(
+        b.x + b.width <= win_w,
+        "x+w<=W, got {} > {win_w}",
+        b.x + b.width
+    );
+    assert!(
+        b.y + b.height <= win_h,
+        "y+h<=H, got {} > {win_h}",
+        b.y + b.height
+    );
+
+    // Numeric sanity (M3): width/height are finite and positive (natural label
+    // size), not degenerate.
+    assert!(
+        b.width > 0.0 && b.height > 0.0,
+        "w/h must be positive: {b:?}"
+    );
+    assert!(b.x.is_finite() && b.y.is_finite(), "x/y finite: {b:?}");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn popover_origin_aligns_with_anchor() {
+    // M3 / plan step 4: pin the *sign* of the composition with an oracle that
+    // is INDEPENDENT of the composition formula — the geometric relationship
+    // between the popover content and its anchor button (both fetched via
+    // walk, the button on the same surface with basis=None).
+    //
+    // GTK centres a default popover horizontally on its anchor, so the content
+    // centre-x must equal the anchor centre-x (catches an x-sign flip), and
+    // the content must sit vertically adjacent to the anchor — just below it,
+    // or flipped just above when the anchor is near the bottom edge — never
+    // deep inside or far from it (catches a y-sign flip). Measured on macOS
+    // quartz: anchor y=716 (bottom) → content composed to y=680, i.e. flipped
+    // above and centred, all corners in-window.
+    if !require_display() {
+        return;
+    }
+    let (app, window, popover) = build_popover_fixture();
+    open_popover(&popover);
+
+    let resp = walk_elements(&app, None, None, &[]).expect("walk ok");
+    let anchor = find_node(&resp.roots, "popover-btn")
+        .expect("anchor button found")
+        .bounds
+        .expect("anchor has bounds");
+    let content = find_node(&resp.roots, "popover-content")
+        .expect("content found")
+        .bounds
+        .expect("content has composed bounds");
+    eprintln!("[measure] anchor={anchor:?} content={content:?}");
+
+    let anchor_cx = anchor.x + anchor.width / 2.0;
+    let content_cx = content.x + content.width / 2.0;
+    // Horizontal centring: catches an x-sign error (which would offset the
+    // content sideways by 2*position_x, well beyond this tolerance).
+    assert!(
+        (anchor_cx - content_cx).abs() <= 8.0,
+        "popover content centre-x {content_cx} must align with anchor centre-x {anchor_cx}"
+    );
+
+    // Vertical adjacency: the content edge nearest the anchor must be within a
+    // small gap of the anchor (popover padding/shadow), i.e. the popover hugs
+    // the anchor either just below or just above it. A y-sign flip would push
+    // it ~2*position_y away (hundreds of px), failing this bound.
+    let gap_below = content.y - (anchor.y + anchor.height); // content under anchor
+    let gap_above = anchor.y - (content.y + content.height); // content over anchor
+    let adjacent = (-2.0..=48.0).contains(&gap_below) || (-2.0..=48.0).contains(&gap_above);
+    assert!(
+        adjacent,
+        "popover content must hug the anchor vertically (gap_below={gap_below}, gap_above={gap_above})"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn same_surface_widget_keeps_basis_none() {
+    // Degrade-proof: a normal main-window widget still gets basis=None
+    // (legacy payload unchanged, AC3).
+    if !require_display() {
+        return;
+    }
+    let (app, window, _popover) = build_popover_fixture();
+    let resp = walk_elements(&app, Some("#anchor-probe"), None, &[]).expect("walk ok");
+    let node = &resp.roots[0];
+    let b = node.bounds.expect("probe has bounds");
+    assert_eq!(b.basis, None, "same-surface widget must keep basis=None");
+    window.close();
+    common::pump_glib(32);
+}
+
 /// DFS helper for `props_reads_string_value_from_entry` — locate a named
 /// widget without going through walk_elements (so the test can prepare
 /// fixture state directly against the GTK object).
