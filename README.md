@@ -127,9 +127,23 @@ Each node carries a fixed schema (`ElementInfo` in
 | `css_classes` | `widget.css_classes()` | `.class` selector values |
 | `visible` | `widget.is_visible()` | **Computed** — effective visibility (parent AND child) |
 | `sensitive` | `widget.is_sensitive()` | **Computed** — effective sensitivity |
-| `bounds` | `widget.compute_bounds(window_root)` | **Computed** — post-layout window-local rect in CSS pixels; `None` when unrealized/unmapped |
+| `bounds` | `widget.compute_bounds(window_root)` (same-surface) / composed (popover) | **Computed** — post-layout window-local rect in CSS pixels; `None` when unrealized/unmapped. Carries an optional `basis` (see below) |
 | `properties` | opt-in via `props=` | See below |
 | `children` | recursive | Capped by `maxDepth` |
+
+`bounds.basis` marks the coordinate provenance of `x`/`y` (both are
+always **parent-window-relative**):
+
+- **absent** (`window_root`) — the common case: the widget shares the
+  window's surface, so the value is `compute_bounds(window_root)`. The
+  field is omitted from the wire, so legacy payloads are unchanged.
+- `"popup_composed"` — the widget lives on a **separate `GdkSurface`**
+  (a `GtkPopover`'s `xdg_popup`), which has no common coordinate space
+  with the window. The value is composed back to the window origin from
+  `popup.position` + the popover/window surface transforms, so a
+  consumer can still run a "4 corners inside the window" overflow check
+  in one coordinate system. See
+  [ADR-0004](docs/adr/0004-popover-cross-surface-bounds.md).
 
 ### Opt-in GObject property read-through (`props=`)
 
