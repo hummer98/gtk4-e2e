@@ -13,9 +13,9 @@ use schemars::{schema_for, JsonSchema};
 use serde_json::Value;
 
 use crate::proto::{
-    Bounds, Capability, ElementInfo, ElementsResponse, EventEnvelope, EventKind, FocusRequest,
-    Info, PinchRequest, PropertyEventData, SwipeRequest, TapTarget, TypeRequest, WaitCondition,
-    WaitRequest, WaitResult,
+    Bounds, BoundsBasis, Capability, ElementInfo, ElementsResponse, EventEnvelope, EventKind,
+    FocusRequest, Info, PinchRequest, PropertyEventData, SwipeRequest, TapTarget, TypeRequest,
+    WaitCondition, WaitRequest, WaitResult,
 };
 
 const PROVENANCE: &str = "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand";
@@ -39,6 +39,7 @@ pub fn write_schemas(out_dir: &Path) -> io::Result<()> {
     write_one::<EventEnvelope>(out_dir, "EventEnvelope")?;
     write_one::<EventKind>(out_dir, "EventKind")?;
     write_one::<PropertyEventData>(out_dir, "PropertyEventData")?;
+    write_one::<BoundsBasis>(out_dir, "BoundsBasis")?;
     write_one::<Bounds>(out_dir, "Bounds")?;
     write_one::<ElementInfo>(out_dir, "ElementInfo")?;
     write_one::<ElementsResponse>(out_dir, "ElementsResponse")?;

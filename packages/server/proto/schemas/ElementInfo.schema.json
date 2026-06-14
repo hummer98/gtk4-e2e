@@ -3,8 +3,18 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
     "Bounds": {
-      "description": "Window-local widget bounds in CSS pixels (top-left origin).\n\nSource: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect` returns `f32`; we widen to `f64` here so JSON consumers don't need to reason about precision quirks of the float ↔ JSON round-trip.",
+      "description": "Window-local widget bounds in CSS pixels (top-left origin).\n\nSource: `gtk::Widget::compute_bounds(window_root)` for same-surface widgets; cross-surface (popover) widgets are composed back to the same parent-window origin (see `basis` / ADR-0004). The graphene `Rect` returns `f32`; we widen to `f64` here so JSON consumers don't need to reason about precision quirks of the float ↔ JSON round-trip.\n\n`basis` documents the origin / provenance of `x`/`y`. It is `None` (omitted from the wire) for the common same-surface case, which means `window_root` — so existing payloads are unchanged. It is `Some(PopupComposed)` only for cross-surface popover widgets.",
       "properties": {
+        "basis": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/BoundsBasis"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "height": {
           "format": "double",
           "type": "number"
@@ -29,6 +39,25 @@
         "y"
       ],
       "type": "object"
+    },
+    "BoundsBasis": {
+      "description": "Coordinate basis of a `Bounds` value — which origin the `x`/`y` are measured against, and whether they were composed across surfaces.\n\nBoth variants are expressed in the **same coordinate space**: the parent `GtkWindow` root widget origin (top-left, CSS px). The distinction is only *how* the value was obtained, which lets a consumer reason about its provenance / precision:\n\n- `WindowRoot` — the widget shares the window's `GdkSurface`, so the value comes straight from `widget.compute_bounds(window_root)`. This is the default and is **omitted from the wire** (see `Bounds.basis`), so legacy payloads are byte-identical. - `PopupComposed` — the widget lives on a separate `GdkSurface` (a `GtkPopover`'s `xdg_popup`), which has no common coordinate space with the window. The value is composed from `popup.position + native surface transforms` back into the parent-window origin (see ADR-0004 / `elements::compose_popover_bounds`).",
+      "oneOf": [
+        {
+          "description": "Parent `GtkWindow` root-widget origin (default). Same-surface widget, value from `compute_bounds(window_root)`.",
+          "enum": [
+            "window_root"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Parent `GtkWindow` root-widget origin, but composed from a separate `GdkPopup` surface via `popup.position` + surface transforms.",
+          "enum": [
+            "popup_composed"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ElementInfo": {
       "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets.\n\n`properties` is populated only when the caller asks for it via the `props=` query parameter on `GET /test/elements` (opt-in; absent in the response when empty). Each entry maps the requested GObject property name to its current value, JSON-encoded by `wait::read_property_as_json` (MVP types: String, bool, i32, f64). Sentinels are used for failure modes so the response stays a flat JSON object instead of a tagged union:\n\n- `{\"$missing\": true}` — widget exposes no such property. - `{\"$unsupported\": \"GTypeName\"}` — property exists but its value type is outside the MVP set.\n\nThese sentinels are stable wire contract; SDKs may decode them into a richer typed result. Key ordering is deterministic (BTreeMap).",
