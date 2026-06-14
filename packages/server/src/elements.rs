@@ -7,8 +7,9 @@
 //! inside an outer match are not duplicated as separate roots (§5.2 P-2).
 
 use crate::gtk;
+use crate::gtk::gdk;
 use crate::gtk::prelude::*;
-use crate::proto::{Bounds, ElementInfo, ElementsResponse};
+use crate::proto::{Bounds, BoundsBasis, ElementInfo, ElementsResponse};
 use crate::tree::{parse_selector, Selector};
 use crate::wait::WidgetLike;
 use std::collections::BTreeMap;
@@ -154,12 +155,7 @@ fn to_element_info(
         .collect();
     let visible = widget.is_visible();
     let sensitive = widget.is_sensitive();
-    let bounds = widget.compute_bounds(window_root).map(|r| Bounds {
-        x: r.x() as f64,
-        y: r.y() as f64,
-        width: r.width() as f64,
-        height: r.height() as f64,
-    });
+    let bounds = compute_widget_bounds(widget, window_root);
     let properties = read_requested_properties(widget, props);
 
     let mut children = Vec::new();
@@ -190,6 +186,109 @@ fn to_element_info(
         properties,
         children,
     }
+}
+
+/// Compute a widget's bounds relative to the parent `GtkWindow` root widget,
+/// dispatching on **surface (GtkNative) identity** rather than on whether
+/// `compute_bounds` happens to return `None` (M1 / ADR-0004).
+///
+/// - Same native as `window_root` (the common case, and the only case for
+///   plain main-window widgets and other toplevels) → the legacy
+///   `compute_bounds(window_root)` path with `basis = None`. Unrealized
+///   same-surface widgets fall here too and yield `None`, exactly as before —
+///   no behavioural change.
+/// - Different native (the widget lives on a separate `GdkSurface`, i.e. a
+///   `GtkPopover`'s `xdg_popup`) → composed back to the window origin via
+///   `compose_popover_bounds`, tagged `basis = Some(PopupComposed)`.
+///   Composition failure (not a `GdkPopup`, position unavailable) returns
+///   `None`, i.e. the same `bounds: null` the caller saw before this change.
+///
+/// Why native identity: `widget.native()` returns the single `GtkNative`
+/// (= one surface) that hosts the widget, so "different surface?" is decided
+/// deterministically and is **independent** of whether the underlying
+/// `gtk_widget_compute_transform` returns `None` or an (incorrect) `Some` on a
+/// given backend (X11 vs Wayland). That removes the risk of the fix being
+/// silently disabled while CI stays green.
+fn compute_widget_bounds(widget: &gtk::Widget, window_root: &gtk::Widget) -> Option<Bounds> {
+    let same_surface = match (widget.native(), window_root.native()) {
+        (Some(wn), Some(rn)) => {
+            // GObject instance identity: the same surface is hosted by the
+            // same `GtkNative` instance, so compare by upcast `==` (mr1).
+            wn.upcast::<gtk::glib::Object>() == rn.upcast::<gtk::glib::Object>()
+        }
+        // Either side has no native (fully unrealized): treat as "not a
+        // cross-surface popover". The legacy path below returns `None`,
+        // preserving the previous `bounds: null`.
+        _ => false,
+    };
+
+    if same_surface {
+        return widget.compute_bounds(window_root).map(|r| Bounds {
+            x: r.x() as f64,
+            y: r.y() as f64,
+            width: r.width() as f64,
+            height: r.height() as f64,
+            basis: None,
+        });
+    }
+
+    compose_popover_bounds(widget, window_root)
+}
+
+/// Compose the bounds of a widget living on a separate `GdkPopup` surface
+/// (a `GtkPopover`) back into the parent `GtkWindow` root-widget coordinate
+/// space. Returns `None` (→ `bounds: null`) when the surface is not a
+/// `GdkPopup` or its negotiated position is unavailable (e.g. the popover is
+/// closed / unmapped).
+///
+/// The parent-window-relative origin of widget `w` is the sum of four terms
+/// (ADR-0004 §Decision); each is read from a stable gtk4-rs `v4_6` API:
+///
+/// ```text
+///   origin = (A) w within the popover widget         compute_bounds(&popover)
+///          − (B) popover widget → popover surface     popover.surface_transform()
+///          + (C) popover surface → parent surface      popup.position_{x,y}()
+///          − (D) parent surface → window root widget   window.surface_transform()
+/// ```
+///
+/// The signs of (B)/(D) were fixed by direct measurement (plan step 4): a
+/// `GtkNative` surface transform is the offset **from the surface origin to
+/// the widget origin** (CSS shadow / margin), so the widget origin in surface
+/// space is `widget_coord − transform`. (C) is already parent-surface
+/// relative and post-negotiation (flip/slide applied), so it adds directly.
+fn compose_popover_bounds(widget: &gtk::Widget, window_root: &gtk::Widget) -> Option<Bounds> {
+    let widget_native = widget.native()?;
+    let popover = widget_native.downcast_ref::<gtk::Popover>()?;
+    let popover_widget = popover.upcast_ref::<gtk::Widget>();
+
+    // (A) widget rect relative to the popover widget origin — same surface, so
+    //     this succeeds. w/h (allocation size) also come from here.
+    let local = widget.compute_bounds(popover_widget)?;
+
+    // (B) popover widget origin → popover surface origin.
+    let (pop_tx, pop_ty) = popover.surface_transform();
+
+    // (C) popover surface origin → parent surface origin (windowing-system
+    //     negotiated; reflects any edge flip/slide).
+    let surface = popover.surface()?;
+    let popup = surface.downcast_ref::<gdk::Popup>()?;
+    let pos_x = popup.position_x() as f64;
+    let pos_y = popup.position_y() as f64;
+
+    // (D) parent surface origin → parent window root widget origin.
+    let root_native = window_root.native()?;
+    let (win_tx, win_ty) = root_native.surface_transform();
+
+    let x = local.x() as f64 - pop_tx + pos_x - win_tx;
+    let y = local.y() as f64 - pop_ty + pos_y - win_ty;
+
+    Some(Bounds {
+        x,
+        y,
+        width: local.width() as f64,
+        height: local.height() as f64,
+        basis: Some(BoundsBasis::PopupComposed),
+    })
 }
 
 /// Build the per-node `properties` map for an opt-in `props=` request.
