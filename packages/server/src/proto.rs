@@ -230,17 +230,54 @@ pub struct PropertyEventData {
     pub ts_ns: u64,
 }
 
+/// Coordinate basis of a `Bounds` value — which origin the `x`/`y` are
+/// measured against, and whether they were composed across surfaces.
+///
+/// Both variants are expressed in the **same coordinate space**: the parent
+/// `GtkWindow` root widget origin (top-left, CSS px). The distinction is only
+/// *how* the value was obtained, which lets a consumer reason about its
+/// provenance / precision:
+///
+/// - `WindowRoot` — the widget shares the window's `GdkSurface`, so the value
+///   comes straight from `widget.compute_bounds(window_root)`. This is the
+///   default and is **omitted from the wire** (see `Bounds.basis`), so legacy
+///   payloads are byte-identical.
+/// - `PopupComposed` — the widget lives on a separate `GdkSurface`
+///   (a `GtkPopover`'s `xdg_popup`), which has no common coordinate space with
+///   the window. The value is composed from
+///   `popup.position + native surface transforms` back into the parent-window
+///   origin (see ADR-0004 / `elements::compose_popover_bounds`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BoundsBasis {
+    /// Parent `GtkWindow` root-widget origin (default). Same-surface widget,
+    /// value from `compute_bounds(window_root)`.
+    WindowRoot,
+    /// Parent `GtkWindow` root-widget origin, but composed from a separate
+    /// `GdkPopup` surface via `popup.position` + surface transforms.
+    PopupComposed,
+}
+
 /// Window-local widget bounds in CSS pixels (top-left origin).
 ///
-/// Source: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect`
+/// Source: `gtk::Widget::compute_bounds(window_root)` for same-surface
+/// widgets; cross-surface (popover) widgets are composed back to the same
+/// parent-window origin (see `basis` / ADR-0004). The graphene `Rect`
 /// returns `f32`; we widen to `f64` here so JSON consumers don't need to
 /// reason about precision quirks of the float ↔ JSON round-trip.
+///
+/// `basis` documents the origin / provenance of `x`/`y`. It is `None`
+/// (omitted from the wire) for the common same-surface case, which means
+/// `window_root` — so existing payloads are unchanged. It is
+/// `Some(PopupComposed)` only for cross-surface popover widgets.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
     pub x: f64,
     pub y: f64,
     pub width: f64,
     pub height: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub basis: Option<BoundsBasis>,
 }
 
 /// One node of the widget tree returned by `GET /test/elements`.
