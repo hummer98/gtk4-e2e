@@ -1,7 +1,7 @@
 {
   "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "description": "Window-local widget bounds in CSS pixels (top-left origin).\n\nSource: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect` returns `f32`; we widen to `f64` here so JSON consumers don't need to reason about precision quirks of the float ↔ JSON round-trip.",
+  "description": "Window-local widget bounds in CSS pixels (top-left origin).\n\nSource: `gtk::Widget::compute_bounds(window_root)` for widgets in the toplevel surface. The graphene `Rect` returns `f32`; we widen to `f64` here so JSON consumers don't need to reason about precision quirks of the float ↔ JSON round-trip.\n\nWidgets on a separate native surface (an open `GtkPopover` and its descendants) have no `compute_bounds` value across the surface boundary, so their bounds are instead **synthesized into the same toplevel-widget coordinate system**: the popover root from its `GdkPopup` geometry (`position_x/y` + surface size) translated by the toplevel `surface_transform`, and each descendant by offsetting its popover-root-relative rect by that origin. The popup surface size may include CSD shadow margin, so the popover rect can read slightly larger than the visible content.",
   "properties": {
     "height": {
       "format": "double",

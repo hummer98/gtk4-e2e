@@ -7,6 +7,8 @@
 //! inside an outer match are not duplicated as separate roots (§5.2 P-2).
 
 use crate::gtk;
+use crate::gtk::gdk;
+use crate::gtk::gdk::prelude::*;
 use crate::gtk::prelude::*;
 use crate::proto::{Bounds, ElementInfo, ElementsResponse};
 use crate::tree::{parse_selector, Selector};
@@ -71,7 +73,8 @@ pub fn walk_elements(
         let widget = window.upcast::<gtk::Widget>();
         match &parsed {
             None => {
-                let info = to_element_info(&widget, &widget, 0, max_depth, props, &mut counter);
+                let info =
+                    to_element_info(&widget, &widget, 0, max_depth, props, &mut counter, None);
                 roots.push(info);
             }
             Some(sel) => {
@@ -102,7 +105,7 @@ fn collect_matches(
     roots: &mut Vec<ElementInfo>,
 ) {
     if widget_matches(widget, sel) {
-        let info = to_element_info(widget, window_root, 0, max_depth, props, counter);
+        let info = to_element_info(widget, window_root, 0, max_depth, props, counter, None);
         roots.push(info);
         return;
     }
@@ -127,6 +130,87 @@ fn widget_matches(widget: &gtk::Widget, sel: &Selector) -> bool {
     }
 }
 
+/// Carries a detected popover root's toplevel-widget origin plus the root
+/// widget itself, so descendant bounds can be composed without re-resolving
+/// the `native → surface → popup → surface_transform` chain per child
+/// (plan §1.1 / §8.1).
+///
+/// The root is held as an **owned** `gtk::Widget`. GObject `.clone()` is a
+/// refcount bump only (cheap), and owning it sidesteps the borrow-checker
+/// conflict that storing a `&gtk::Widget` reference would create against the
+/// DFS lifetimes. Descendants receive `Option<&PopoverFrame>` by reference so
+/// no per-child clone happens.
+struct PopoverFrame {
+    /// Toplevel-widget-space origin `(x, y)` of the popover root.
+    origin: (f64, f64),
+    /// The popover root widget; the `compute_bounds` target for descendants.
+    root: gtk::Widget,
+}
+
+/// Compose a popover root's bounds in toplevel-widget coordinates from its
+/// GdkPopup surface geometry. GTK-free so it is unit-testable (plan §1.2).
+///
+/// `position_*` are the popup's offset within the parent (toplevel) *surface*;
+/// `toplevel_transform` is the toplevel `surface_transform` translating surface
+/// → widget coordinates, so `widget = surface + transform` (research §4.1; R3
+/// fixes the sign as addition). The popup surface size is carried through
+/// unchanged (may include CSD shadow margin — R1).
+fn compose_popover_root_bounds(
+    position_x: f64,
+    position_y: f64,
+    surface_w: f64,
+    surface_h: f64,
+    toplevel_transform: (f64, f64),
+) -> Bounds {
+    Bounds {
+        x: position_x + toplevel_transform.0,
+        y: position_y + toplevel_transform.1,
+        width: surface_w,
+        height: surface_h,
+    }
+}
+
+/// Compose a popover descendant's bounds: its popover-root-relative local rect
+/// offset by the popover root's toplevel-widget origin (plan §1.2). The origin
+/// affects only `x`/`y`; the size comes from the local rect.
+fn compose_child_bounds(
+    origin: (f64, f64),
+    local_x: f64,
+    local_y: f64,
+    local_w: f64,
+    local_h: f64,
+) -> Bounds {
+    Bounds {
+        x: origin.0 + local_x,
+        y: origin.1 + local_y,
+        width: local_w,
+        height: local_h,
+    }
+}
+
+/// Collection layer (plan §1.4, research §4.1): derive a popover root's
+/// rectangle and toplevel-widget origin from its GdkPopup surface geometry.
+///
+/// Returns `None` — so the caller keeps the unchanged `None` bounds — when the
+/// popover is not realized, has no surface, or the surface is not a `GdkPopup`
+/// (e.g. a regular `GdkToplevel`). The `dynamic_cast_ref::<gdk::Popup>()?`
+/// short-circuit absorbs R6 (non-popover surfaces are never mis-composed).
+fn popover_root_frame(
+    popover: &gtk::Widget,
+    toplevel: &gtk::Widget,
+) -> Option<(Bounds, (f64, f64))> {
+    let native = popover.native()?;
+    let surface = native.surface()?;
+    let popup = surface.dynamic_cast_ref::<gdk::Popup>()?;
+    let px = popup.position_x() as f64;
+    let py = popup.position_y() as f64;
+    let w = surface.width() as f64;
+    let h = surface.height() as f64;
+    let (tx, ty) = toplevel.native()?.surface_transform();
+    let bounds = compose_popover_root_bounds(px, py, w, h, (tx, ty));
+    Some((bounds, (bounds.x, bounds.y)))
+}
+
 fn to_element_info(
     widget: &gtk::Widget,
     window_root: &gtk::Widget,
@@ -134,6 +218,7 @@ fn to_element_info(
     max_depth: Option<u32>,
     props: &[String],
     counter: &mut u32,
+    popover_origin: Option<&PopoverFrame>,
 ) -> ElementInfo {
     let id = format!("e{}", *counter);
     *counter += 1;
@@ -154,12 +239,71 @@ fn to_element_info(
         .collect();
     let visible = widget.is_visible();
     let sensitive = widget.is_sensitive();
-    let bounds = widget.compute_bounds(window_root).map(|r| Bounds {
-        x: r.x() as f64,
-        y: r.y() as f64,
-        width: r.width() as f64,
-        height: r.height() as f64,
-    });
+
+    // Bounds decision — 4 independent branches (plan §1.1). The popover-root
+    // test (branch 2) is evaluated independently of `popover_origin`: a popover
+    // root reaches DFS with `popover_origin = None` (it is the origin *setter*),
+    // so nesting it under the `Some` branch would drop the first root to None.
+    //
+    // `child_frame` is `Some` only when this widget is a freshly detected
+    // popover root (branch 2); `propagate_incoming` marks a popover descendant
+    // (branch 3) that should reuse the inherited frame.
+    let mut child_frame: Option<PopoverFrame> = None;
+    let mut propagate_incoming = false;
+    let bounds = match widget.compute_bounds(window_root) {
+        // Branch 1: same-surface widget — existing behaviour, untouched.
+        // Children carry no popover frame.
+        Some(r) => Some(Bounds {
+            x: r.x() as f64,
+            y: r.y() as f64,
+            width: r.width() as f64,
+            height: r.height() as f64,
+        }),
+        None => {
+            if widget.dynamic_cast_ref::<gtk::Popover>().is_some() {
+                // Branch 2: popover root crossing into a new native surface.
+                // Synthesise its frame from GdkPopup geometry and propagate.
+                match popover_root_frame(widget, window_root) {
+                    Some((b, origin)) => {
+                        child_frame = Some(PopoverFrame {
+                            origin,
+                            root: widget.clone(),
+                        });
+                        Some(b)
+                    }
+                    None => None,
+                }
+            } else if let Some(frame) = popover_origin {
+                // Branch 3: descendant of a detected popover. Measure relative
+                // to the popover root (same surface → succeeds) and offset by
+                // the root origin. Reuse the inherited frame for children.
+                propagate_incoming = true;
+                widget.compute_bounds(&frame.root).map(|local| {
+                    compose_child_bounds(
+                        frame.origin,
+                        local.x() as f64,
+                        local.y() as f64,
+                        local.width() as f64,
+                        local.height() as f64,
+                    )
+                })
+            } else {
+                // Branch 4: unrealized / unsupported — unchanged (None).
+                None
+            }
+        }
+    };
+
+    // Frame handed to children: a new root's frame (branch 2), the inherited
+    // frame for popover descendants (branch 3), or none (branch 1 / 4).
+    let frame_for_children: Option<&PopoverFrame> = if let Some(f) = child_frame.as_ref() {
+        Some(f)
+    } else if propagate_incoming {
+        popover_origin
+    } else {
+        None
+    };
+
     let properties = read_requested_properties(widget, props);
 
     let mut children = Vec::new();
@@ -174,6 +318,7 @@ fn to_element_info(
                 max_depth,
                 props,
                 counter,
+                frame_for_children,
             ));
             cur = next;
         }
@@ -250,4 +395,43 @@ fn read_requested_properties(
 
 fn node_count(info: &ElementInfo) -> u32 {
     1 + info.children.iter().map(node_count).sum::<u32>()
+}
+
+#[cfg(test)]
+mod tests {
+    //! Deterministic, GTK-free unit tests for the coordinate-composition pure
+    //! functions (plan §4.1). These pin the arithmetic for R1 (size carried
+    //! through), R2 (single logical-px unit) and R3 (transform addition sign)
+    //! without depending on a live GdkPopup, so they run in headless CI.
+    use super::{compose_child_bounds, compose_popover_root_bounds};
+
+    #[test]
+    fn popover_root_zero_transform_is_identity() {
+        let b = compose_popover_root_bounds(200.0, 50.0, 160.0, 120.0, (0.0, 0.0));
+        assert_eq!((b.x, b.y, b.width, b.height), (200.0, 50.0, 160.0, 120.0));
+    }
+
+    #[test]
+    fn popover_root_nonzero_transform_is_added() {
+        // R3: widget = surface + transform (addition, not subtraction).
+        let b = compose_popover_root_bounds(200.0, 50.0, 160.0, 120.0, (8.0, 8.0));
+        assert_eq!((b.x, b.y), (208.0, 58.0));
+        // The transform must not perturb the surface size.
+        assert_eq!((b.width, b.height), (160.0, 120.0));
+    }
+
+    #[test]
+    fn child_offsets_by_origin() {
+        let b = compose_child_bounds((200.0, 50.0), 10.0, 12.0, 80.0, 20.0);
+        assert_eq!((b.x, b.y, b.width, b.height), (210.0, 62.0, 80.0, 20.0));
+    }
+
+    #[test]
+    fn child_size_comes_from_local_origin_only_shifts_xy() {
+        // Composition-direction guard: origin shifts x/y only; width/height are
+        // taken verbatim from the local (popover-root-relative) rect.
+        let b = compose_child_bounds((1000.0, 2000.0), 0.0, 0.0, 33.0, 44.0);
+        assert_eq!((b.x, b.y), (1000.0, 2000.0));
+        assert_eq!((b.width, b.height), (33.0, 44.0));
+    }
 }

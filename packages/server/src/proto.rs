@@ -232,9 +232,20 @@ pub struct PropertyEventData {
 
 /// Window-local widget bounds in CSS pixels (top-left origin).
 ///
-/// Source: `gtk::Widget::compute_bounds(window_root)`. The graphene `Rect`
-/// returns `f32`; we widen to `f64` here so JSON consumers don't need to
-/// reason about precision quirks of the float ↔ JSON round-trip.
+/// Source: `gtk::Widget::compute_bounds(window_root)` for widgets in the
+/// toplevel surface. The graphene `Rect` returns `f32`; we widen to `f64` here
+/// so JSON consumers don't need to reason about precision quirks of the
+/// float ↔ JSON round-trip.
+///
+/// Widgets on a separate native surface (an open `GtkPopover` and its
+/// descendants) have no `compute_bounds` value across the surface boundary, so
+/// their bounds are instead **synthesized into the same toplevel-widget
+/// coordinate system**: the popover root from its `GdkPopup` geometry
+/// (`position_x/y` + surface size) translated by the toplevel
+/// `surface_transform`, and each descendant by offsetting its
+/// popover-root-relative rect by that origin. The popup surface size may
+/// include CSD shadow margin, so the popover rect can read slightly larger
+/// than the visible content.
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq)]
 pub struct Bounds {
     pub x: f64,
@@ -255,7 +266,9 @@ pub struct Bounds {
 /// normalised to `None` (matches `tree::GtkTree::name()` semantics —
 /// tree.rs:169-176).
 ///
-/// `bounds` is `None` for unrealized / unmapped widgets.
+/// `bounds` is `None` for unrealized / unmapped widgets. An **open** popover
+/// (and its children) carries real synthesized bounds; a closed / unrealized
+/// popover stays `None` (see `Bounds` for the coordinate synthesis).
 ///
 /// `properties` is populated only when the caller asks for it via the
 /// `props=` query parameter on `GET /test/elements` (opt-in; absent in
