@@ -15,8 +15,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
 use crate::input::{
-    focus_widget, resolve_xy, tap_widget, type_text, FocusError, PinchError, SwipeError, TapError,
-    TypeError,
+    focus_widget, resolve_xy, tap_widget, type_text, validate_press, validate_press_widget,
+    FocusError, PinchError, PressError, SwipeError, TapError, TypeError,
 };
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
 use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
@@ -267,6 +267,80 @@ pub(crate) fn dispatch_pinch(
     };
 
     let anim = match crate::input::validate_pinch(&window, center, scale, duration_ms) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    };
+
+    anim.run(move || {
+        let _ = reply.send(Ok(()));
+    });
+}
+
+/// GTK-bound entry point for `MainCmd::Press` (Task 029, T029). Mirror of
+/// `dispatch_pinch` for the xy path and `dispatch_focus` for the selector path.
+/// Validates inputs synchronously, then either replies with the validation
+/// error or schedules the long-press timer and replies with `Ok(())` from the
+/// timer's completion frame.
+///
+/// Exactly one of `selector` / `xy` is set — the HTTP layer (`post_press`)
+/// enforces this and pre-validates the selector. The mismatch arms below are
+/// defensive (`InvalidTarget`), mirroring the other dispatch helpers.
+pub(crate) fn dispatch_press(
+    app: &crate::gtk::Application,
+    selector: Option<String>,
+    xy: Option<XY>,
+    hold_ms: u64,
+    reply: tokio::sync::oneshot::Sender<Result<(), PressError>>,
+) {
+    let window = match app
+        .active_window()
+        .and_then(|w| w.downcast::<crate::gtk::ApplicationWindow>().ok())
+    {
+        Some(w) => w,
+        None => {
+            let _ = reply.send(Err(PressError::NoActiveWindow));
+            return;
+        }
+    };
+
+    let anim = match (selector, xy) {
+        (Some(selector), None) => {
+            // Selector path: resolve via `GtkTree` (→ `SelectorNotFound`),
+            // then validate the widget for an attached `GestureLongPress`.
+            let sel = match parse_selector(&selector) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = reply.send(Err(PressError::SelectorNotFound {
+                        selector: format!("{selector}: {}", e.reason),
+                    }));
+                    return;
+                }
+            };
+            let tree = GtkTree { app };
+            let widget = match find_first(tree, &sel) {
+                Some(w) => w,
+                None => {
+                    let _ = reply.send(Err(PressError::SelectorNotFound { selector }));
+                    return;
+                }
+            };
+            validate_press_widget(&widget, &selector, hold_ms)
+        }
+        (None, Some(center)) => validate_press(&window, center, hold_ms),
+        _ => {
+            // Both or neither target set — should be unreachable past the
+            // HTTP pre-validation, but reply defensively rather than panic.
+            let _ = reply.send(Err(PressError::InvalidTarget {
+                reason: "exactly one of selector / xy required",
+            }));
+            return;
+        }
+    };
+
+    let anim = match anim {
         Ok(a) => a,
         Err(e) => {
             let _ = reply.send(Err(e));

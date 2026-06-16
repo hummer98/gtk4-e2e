@@ -180,6 +180,7 @@ mod start_impl {
                 Capability::State,
                 Capability::Pinch,
                 Capability::Focus,
+                Capability::Press,
             ],
             token_required: token.as_ref().map(|_| true),
         });

@@ -40,6 +40,7 @@ Subcommands:
   focus <selector>                  POST /test/focus (grab_focus → :focus CSS)
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
+  press <selector|x,y> <hold_ms>    POST /test/press (GestureLongPress)
   screenshot <out.png>                                 GET /test/screenshot → save to file
   screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
                   [--threshold <0.0-1.0>] [--update-baseline]
@@ -392,6 +393,27 @@ async function runPinch(parsed: ParsedArgs): Promise<void> {
   await client.pinch(center, scale, durationMs);
 }
 
+function parseHoldMs(arg: string): number {
+  if (!/^\d+$/.test(arg)) {
+    throw new ArgvError(`press: expected non-negative integer hold_ms, got: ${arg}`);
+  }
+  return Number.parseInt(arg, 10);
+}
+
+async function runPress(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 2) {
+    throw new ArgvError("press requires <selector|x,y> <hold_ms>");
+  }
+  const target = parseTapTarget(parsed.positional[0]);
+  const holdMs = parseHoldMs(parsed.positional[1]);
+  const client = await buildClient(parsed);
+  const opts =
+    typeof target === "string"
+      ? { selector: target, hold_ms: holdMs }
+      : { xy: target, hold_ms: holdMs };
+  await client.press(opts);
+}
+
 async function runElements(parsed: ParsedArgs): Promise<void> {
   const client = await buildClient(parsed);
   const resp = await client.elements({
@@ -617,6 +639,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "pinch":
         await runPinch(parsed);
+        return 0;
+      case "press":
+        await runPress(parsed);
         return 0;
       case "screenshot":
         return await runScreenshot(parsed);

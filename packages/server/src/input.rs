@@ -774,3 +774,237 @@ pub fn find_zoom_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::GestureZo
     }
     None
 }
+
+// ---------------------------------------------------------------------------
+// Press (Task 029, T029) — GestureLongPress
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the press (long-press) pipeline.
+///
+/// Mapped to HTTP status codes in `http.rs` (see plan §4):
+///
+/// | error                          | http |
+/// |--------------------------------|------|
+/// | `ZeroHold`                     | 422  |
+/// | `HoldTooLong`                  | 422  |
+/// | `OutOfBounds`                  | 422  |
+/// | `NoActiveWindow`               | 422  |
+/// | `InvalidTarget`                | 422  |
+/// | `NoLongPressableAtPoint`       | 404  |
+/// | `SelectorNotFound`             | 404  |
+/// | `NoLongPressableForSelector`   | 404  |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PressError {
+    ZeroHold,
+    HoldTooLong { hold_ms: u64 },
+    OutOfBounds { x: i32, y: i32 },
+    NoActiveWindow,
+    NoLongPressableAtPoint { x: i32, y: i32 },
+    SelectorNotFound { selector: String },
+    NoLongPressableForSelector { selector: String },
+    InvalidTarget { reason: &'static str },
+}
+
+impl std::fmt::Display for PressError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PressError::ZeroHold => write!(f, "invalid_hold: zero"),
+            PressError::HoldTooLong { hold_ms } => {
+                write!(f, "invalid_hold: too_long ({hold_ms} ms)")
+            }
+            PressError::OutOfBounds { x, y } => write!(f, "out_of_bounds: ({x}, {y})"),
+            PressError::NoActiveWindow => write!(f, "no_active_window"),
+            PressError::NoLongPressableAtPoint { x, y } => {
+                write!(f, "no_long_pressable_at_point: ({x}, {y})")
+            }
+            PressError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            PressError::NoLongPressableForSelector { selector } => {
+                write!(f, "no_long_pressable_for_selector: {selector}")
+            }
+            PressError::InvalidTarget { reason } => write!(f, "invalid_target: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for PressError {}
+
+/// Upper bound on `hold_ms`. Plan §4: a single long-press that holds longer
+/// than 10 s in a test is almost certainly a mistake. Single source of truth;
+/// the HTTP layer references this for its R1 pre-validation.
+pub const MAX_PRESS_HOLD_MS: u64 = 10_000;
+
+/// Plan output from [`validate_press`] / [`validate_press_widget`]. Holds the
+/// resolved `GestureLongPress`, the emit coordinates, and the hold delay.
+/// Calling [`LongPressAnimation::run`] schedules a single-shot GLib timer and
+/// consumes `self`. Pure (no widget mutation, no timer yet) so HTTP handlers
+/// can inspect validation outcomes off the GLib thread before scheduling.
+pub struct LongPressAnimation {
+    gesture: gtk::GestureLongPress,
+    x: f64,
+    y: f64,
+    hold_ms: u64,
+}
+
+impl LongPressAnimation {
+    /// Schedule the press via a single-shot `glib::timeout_add_local` that fires
+    /// once after `hold_ms`, emits the `pressed` signal at `(x, y)`, calls
+    /// `on_complete`, and returns `ControlFlow::Break`. Must be called on the
+    /// GLib main thread.
+    ///
+    /// Plan §4: `GestureLongPress::pressed` is `(gesture, x: f64, y: f64)`. As
+    /// with `PinchAnimation`, the `emit_by_name` turbofish is `<()>` because the
+    /// signal returns void.
+    pub fn run<F: FnOnce() + 'static>(self, on_complete: F) {
+        let LongPressAnimation {
+            gesture,
+            x,
+            y,
+            hold_ms,
+        } = self;
+        let mut on_complete_slot = Some(on_complete);
+        glib::timeout_add_local(std::time::Duration::from_millis(hold_ms), move || {
+            gesture.emit_by_name::<()>("pressed", &[&x, &y]);
+            if let Some(cb) = on_complete_slot.take() {
+                cb();
+            }
+            glib::ControlFlow::Break
+        });
+    }
+}
+
+/// Validate `hold_ms` against the shared bounds. Shared by both the xy and
+/// selector entry points so the double-defense (HTTP R1 + GLib-side) checks
+/// stay identical.
+fn validate_hold(hold_ms: u64) -> Result<(), PressError> {
+    if hold_ms == 0 {
+        return Err(PressError::ZeroHold);
+    }
+    if hold_ms > MAX_PRESS_HOLD_MS {
+        return Err(PressError::HoldTooLong { hold_ms });
+    }
+    Ok(())
+}
+
+/// Validate an xy-targeted press and prepare a [`LongPressAnimation`].
+///
+/// Pure: does not schedule a GLib timer or mutate any widget. Order of checks:
+/// 1. `hold_ms` validation (zero / too_long).
+/// 2. window bounds (with `default_size()` fallback for pre-mapped quartz).
+/// 3. xy resolution (leaf widget at `center`).
+/// 4. ancestor walk for `GestureLongPress`.
+pub fn validate_press(
+    window: &gtk::ApplicationWindow,
+    center: XY,
+    hold_ms: u64,
+) -> Result<LongPressAnimation, PressError> {
+    validate_hold(hold_ms)?;
+
+    let alloc = window.allocation();
+    let (mut w, mut h) = (alloc.width(), alloc.height());
+    if w <= 0 || h <= 0 {
+        let (dw, dh) = window.default_size();
+        if dw > 0 {
+            w = dw;
+        }
+        if dh > 0 {
+            h = dh;
+        }
+    }
+    if center.x < 0 || center.y < 0 || center.x >= w || center.y >= h {
+        return Err(PressError::OutOfBounds {
+            x: center.x,
+            y: center.y,
+        });
+    }
+
+    let leaf = match resolve_xy(window, center.x, center.y) {
+        Ok(w) => w,
+        Err(TapError::OutOfBounds { x, y }) => return Err(PressError::OutOfBounds { x, y }),
+        Err(_) => {
+            return Err(PressError::NoLongPressableAtPoint {
+                x: center.x,
+                y: center.y,
+            });
+        }
+    };
+
+    let gesture =
+        find_long_press_gesture_ancestor(&leaf).ok_or(PressError::NoLongPressableAtPoint {
+            x: center.x,
+            y: center.y,
+        })?;
+
+    Ok(LongPressAnimation {
+        gesture,
+        x: center.x as f64,
+        y: center.y as f64,
+        hold_ms,
+    })
+}
+
+/// Validate a selector-targeted press against an already-resolved `widget` and
+/// prepare a [`LongPressAnimation`].
+///
+/// Pure. The `GestureLongPress` is searched on the widget or an ancestor
+/// (N1: not found ⇒ `NoLongPressableForSelector`). Emit coordinates are the
+/// widget centre via `widget.compute_bounds(widget)` (`(w/2, h/2)`, falling
+/// back to `(0.0, 0.0)`); the coordinates are informational for
+/// `GestureLongPress`, which fires regardless of the exact point.
+pub fn validate_press_widget(
+    widget: &gtk::Widget,
+    selector: &str,
+    hold_ms: u64,
+) -> Result<LongPressAnimation, PressError> {
+    validate_hold(hold_ms)?;
+
+    let gesture = find_long_press_gesture_ancestor(widget).ok_or_else(|| {
+        PressError::NoLongPressableForSelector {
+            selector: selector.to_string(),
+        }
+    })?;
+
+    let (x, y) = widget
+        .compute_bounds(widget)
+        .map(|r| ((r.width() / 2.0) as f64, (r.height() / 2.0) as f64))
+        .unwrap_or((0.0, 0.0));
+
+    Ok(LongPressAnimation {
+        gesture,
+        x,
+        y,
+        hold_ms,
+    })
+}
+
+/// Synthesize an xy-targeted press, returning once the press is scheduled (not
+/// when it completes). Mirror of [`pinch`] for fire-and-forget callers; the
+/// HTTP path uses [`validate_press`] + [`LongPressAnimation::run`] directly so
+/// it can reply on completion.
+pub fn press(window: &gtk::ApplicationWindow, center: XY, hold_ms: u64) -> Result<(), PressError> {
+    let anim = validate_press(window, center, hold_ms)?;
+    anim.run(|| {});
+    Ok(())
+}
+
+/// Walk parents from `widget` looking for a widget with an attached
+/// `gtk::GestureLongPress`. Returns the gesture so the caller can re-target it
+/// without a second walk. Mirror of [`find_zoom_gesture_ancestor`].
+pub fn find_long_press_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::GestureLongPress> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        let parent = w.parent();
+        let controllers = w.observe_controllers();
+        let n = controllers.n_items();
+        for i in 0..n {
+            if let Some(item) = controllers.item(i) {
+                if let Ok(glp) = item.downcast::<gtk::GestureLongPress>() {
+                    return Some(glp);
+                }
+            }
+        }
+        cur = parent;
+    }
+    None
+}

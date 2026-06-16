@@ -75,6 +75,7 @@ interface RouteHandlers {
   focus?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
+  press?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
   wait?: (body: unknown) => Response | Promise<Response>;
 }
@@ -105,6 +106,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/focus" && handlers.focus) return handlers.focus(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
+      if (url.pathname === "/test/press" && handlers.press) return handlers.press(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
       if (url.pathname === "/test/wait" && handlers.wait) return handlers.wait(body);
       return new Response("not found", { status: 404 });
@@ -363,6 +365,51 @@ describe("cli swipe", () => {
     const result = await runCli(["--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("swipe");
+  });
+});
+
+describe("cli press", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector, hold_ms} as POST /test/press body", async () => {
+    mock = startMock({ press: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli(["press", "#longpress1", "700", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.path).toBe("/test/press");
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({ selector: "#longpress1", hold_ms: 700 });
+  });
+
+  test("sends {xy, hold_ms} when target is x,y", async () => {
+    mock = startMock({ press: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli(["press", "80,60", "700", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({ xy: { x: 80, y: 60 }, hold_ms: 700 });
+  });
+
+  test("missing positional args exits 2", async () => {
+    const result = await runCli(["press", "#longpress1"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+
+  test("non-integer hold_ms exits 2", async () => {
+    mock = startMock({ press: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli(["press", "#longpress1", "abc", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("hold_ms");
+  });
+
+  test("USAGE mentions the press subcommand", async () => {
+    const result = await runCli(["--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("press");
   });
 });
 

@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
-use crate::input::{FocusError, PinchError, SwipeError, TapError, TypeError};
+use crate::input::{FocusError, PinchError, PressError, SwipeError, TapError, TypeError};
 use crate::proto::{ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
@@ -102,6 +102,16 @@ pub enum MainCmd {
         scale: f32,
         duration_ms: u64,
         reply: oneshot::Sender<Result<(), PinchError>>,
+    },
+    /// Synthesize a long-press (press → hold → release) firing the
+    /// `GestureLongPress::pressed` signal (Task 029, T029). Exactly one of
+    /// `selector` / `xy` is set (HTTP layer enforces this). Replies on the
+    /// timer's completion, mirroring `Pinch`.
+    Press {
+        selector: Option<String>,
+        xy: Option<XY>,
+        hold_ms: u64,
+        reply: oneshot::Sender<Result<(), PressError>>,
     },
 }
 
@@ -220,6 +230,24 @@ fn handle_cmd(cmd: MainCmd) {
                 }
                 None => {
                     let _ = reply.send(Err(PinchError::NoActiveWindow));
+                }
+            });
+        }
+        MainCmd::Press {
+            selector,
+            xy,
+            hold_ms,
+            reply,
+        } => {
+            // Task 029 §4: same APP.with-direct-borrow trick as Swipe / Pinch so
+            // the `Some/None` arms can each consume `reply` without
+            // borrow-checker contortions inside a `with_app` closure.
+            APP.with(|slot| match slot.borrow().as_ref() {
+                Some(app) => {
+                    crate::wait::dispatch_press(app, selector, xy, hold_ms, reply);
+                }
+                None => {
+                    let _ = reply.send(Err(PressError::NoActiveWindow));
                 }
             });
         }

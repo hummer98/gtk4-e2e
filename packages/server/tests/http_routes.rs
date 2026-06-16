@@ -42,6 +42,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::State,
             Capability::Pinch,
             Capability::Focus,
+            Capability::Press,
         ],
         token_required: None,
     });
@@ -660,8 +661,9 @@ async fn type_capability_in_info() {
             "state",
             "pinch",
             "focus",
+            "press",
         ],
-        "capabilities order must include type, swipe, elements, state, pinch, and focus at the tail"
+        "capabilities order must include type, swipe, elements, state, pinch, focus, and press at the tail"
     );
 }
 
@@ -1712,4 +1714,310 @@ async fn wait_app_state_eq_path_missing_times_out_408() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::REQUEST_TIMEOUT);
+}
+
+// ----- Task 029 (T029): press capability -----
+
+#[tokio::test]
+async fn press_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn press_missing_target_422() {
+    // R1: exactly one of selector/xy required — neither provided is 422.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "hold_ms": 600 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_target")
+    );
+}
+
+#[tokio::test]
+async fn press_both_targets_422() {
+    // R1: providing both selector and xy is 422.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({
+        "selector": "#longpress1",
+        "xy": {"x": 10, "y": 10},
+        "hold_ms": 600,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_target")
+    );
+}
+
+#[tokio::test]
+async fn press_zero_hold_422() {
+    // R1: hold_ms == 0 is rejected up-front by the HTTP layer (pure path).
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "selector": "#longpress1", "hold_ms": 0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_hold"));
+    assert_eq!(v.get("reason").and_then(Value::as_str), Some("zero"));
+}
+
+#[tokio::test]
+async fn press_hold_too_long_422() {
+    // R1: hold_ms > MAX_PRESS_HOLD_MS (10_000) is rejected up-front.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "selector": "#longpress1", "hold_ms": 10_001 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_hold"));
+    assert_eq!(v.get("reason").and_then(Value::as_str), Some("too_long"));
+}
+
+#[tokio::test]
+async fn press_invalid_selector_422() {
+    // R1: malformed selector syntax is rejected up-front.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "selector": "@bad", "hold_ms": 600 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_selector")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn press_endpoint_returns_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-press-ok")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let drawing_area = gtk::DrawingArea::builder()
+        .content_width(160)
+        .content_height(120)
+        .build();
+    drawing_area.set_widget_name("longpress1");
+    let gesture = gtk::GestureLongPress::new();
+    drawing_area.add_controller(gesture);
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&drawing_area)
+        .default_width(360)
+        .default_height(480)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({ "selector": "#longpress1", "hold_ms": 100 });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/test/press")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    let resp = tokio::select! {
+        r = app.oneshot(req) => r.unwrap(),
+        _ = async {
+            for _ in 0..400 {
+                for _ in 0..16 {
+                    if !gtk::glib::MainContext::default().iteration(false) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        } => panic!("pump finished before request returned"),
+    };
+    assert_eq!(resp.status(), StatusCode::OK);
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn press_no_long_pressable_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-press-404")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let label = gtk::Label::new(Some("plain"));
+    label.set_widget_name("label1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&label)
+        .default_width(360)
+        .default_height(200)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({ "xy": {"x": 50, "y": 50}, "hold_ms": 100 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("no_long_pressable_at_point")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn press_selector_not_found_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-press-sel404")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({ "selector": "#nosuch", "hold_ms": 100 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/press")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("selector_not_found")
+    );
+
+    window.close();
+    common::pump_glib(32);
 }

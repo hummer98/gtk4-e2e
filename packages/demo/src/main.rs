@@ -8,7 +8,8 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry,
-    GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Stack, Switch, ToggleButton,
+    GestureLongPress, GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Stack, Switch,
+    ToggleButton,
 };
 #[cfg(feature = "e2e")]
 use serde_json::{json, Value};
@@ -293,6 +294,42 @@ fn build_ui(
     }
     drawing_area.add_controller(gesture);
 
+    // Task 029 (T029): DrawingArea + GestureLongPress for the `press`
+    // capability. `connect_pressed` fires when the server injects a
+    // press → hold → release sequence; the handler bumps an app-state counter
+    // and a `fired` flag so scenarios can `wait { app_state_eq,
+    // path = "/longpress1/fired", value = true }`. Mirror of the `#zoom1`
+    // pinch widget above. The emit coordinates are informational only.
+    let longpress_area = DrawingArea::builder()
+        .content_width(160)
+        .content_height(80)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+    longpress_area.set_widget_name("longpress1");
+
+    let longpress_gesture = GestureLongPress::new();
+    #[cfg(feature = "e2e")]
+    {
+        let server_slot = server_slot.clone();
+        let demo_state = demo_state.clone();
+        let press_count: Rc<RefCell<u64>> = Rc::new(RefCell::new(0));
+        longpress_gesture.connect_pressed(move |_g, _x, _y| {
+            {
+                let mut count = press_count.borrow_mut();
+                *count += 1;
+            }
+            set_at(&demo_state, "/longpress1/fired", json!(true));
+            set_at(
+                &demo_state,
+                "/longpress1/count",
+                json!(*press_count.borrow()),
+            );
+            push_state(&server_slot, &demo_state);
+        });
+    }
+    longpress_area.add_controller(longpress_gesture);
+
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(8)
@@ -313,6 +350,7 @@ fn build_ui(
     vbox.append(&scroll_pos);
     vbox.append(&drawing_area);
     vbox.append(&zoom_pos);
+    vbox.append(&longpress_area);
     vbox.append(&mode_stack);
     vbox.append(&mode_toggle);
 

@@ -2,7 +2,7 @@
 //!
 //! Routes (plan §Q11 / §Q4 Step 6 / Step 9 — T013 adds /test/type, T014 adds
 //! /test/swipe, T015 adds /test/pinch, T018 adds /test/elements, issue #3 adds
-//! /test/focus):
+//! /test/focus, Task 029 adds /test/press):
 //!
 //! | route                | method | success | failure |
 //! |----------------------|--------|---------|---------|
@@ -10,6 +10,7 @@
 //! | `/test/tap`          | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/swipe`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/pinch`        | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/press`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
@@ -37,11 +38,13 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::elements::ElementsError;
-use crate::input::{FocusError, PinchError, SwipeError, TapError, TypeError};
+use crate::input::{
+    FocusError, PinchError, PressError, SwipeError, TapError, TypeError, MAX_PRESS_HOLD_MS,
+};
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{
-    EventEnvelope, FocusRequest, Info, PinchRequest, SwipeRequest, TapTarget, TypeRequest,
-    WaitRequest,
+    EventEnvelope, FocusRequest, Info, PinchRequest, PressRequest, SwipeRequest, TapTarget,
+    TypeRequest, WaitRequest,
 };
 use crate::snapshot::ScreenshotError;
 use crate::state::AppDefinedState;
@@ -68,6 +71,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/tap", post(post_tap))
         .route("/test/swipe", post(post_swipe))
         .route("/test/pinch", post(post_pinch))
+        .route("/test/press", post(post_press))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
@@ -258,6 +262,91 @@ fn pinch_error_response(e: PinchError) -> Response {
         ),
         PinchError::InvalidScale { reason } => {
             validation_error("invalid_scale", json!({ "reason": reason }))
+        }
+    }
+}
+
+async fn post_press(State(state): State<AppState>, body: String) -> Response {
+    let req: PressRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    // R1: pre-validate on the pure (non-GLib) path before crossing the channel.
+    // 1. Exactly one of selector / xy must be set.
+    match (&req.selector, &req.xy) {
+        (Some(_), None) | (None, Some(_)) => {}
+        _ => {
+            return validation_error(
+                "invalid_target",
+                json!({ "reason": "exactly one of selector / xy required" }),
+            );
+        }
+    }
+    // 2. hold_ms bounds (zero / too_long).
+    if req.hold_ms == 0 {
+        return validation_error("invalid_hold", json!({ "reason": "zero" }));
+    }
+    if req.hold_ms > MAX_PRESS_HOLD_MS {
+        return validation_error(
+            "invalid_hold",
+            json!({ "reason": "too_long", "hold_ms": req.hold_ms }),
+        );
+    }
+    // 3. selector syntax (mirror of post_focus / post_type): a parser error is
+    //    422 invalid_selector here rather than 404 from the dispatch fallback.
+    if let Some(selector) = &req.selector {
+        if let Err(e) = parse_selector(selector) {
+            return validation_error("invalid_selector", json!({ "reason": e.reason }));
+        }
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Press {
+            selector: req.selector,
+            xy: req.xy,
+            hold_ms: req.hold_ms,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match rx.await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => press_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+
+fn press_error_response(e: PressError) -> Response {
+    match e {
+        PressError::ZeroHold => validation_error("invalid_hold", json!({ "reason": "zero" })),
+        PressError::HoldTooLong { hold_ms } => validation_error(
+            "invalid_hold",
+            json!({ "reason": "too_long", "hold_ms": hold_ms }),
+        ),
+        PressError::OutOfBounds { x, y } => {
+            validation_error("out_of_bounds", json!({ "x": x, "y": y }))
+        }
+        PressError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        PressError::NoLongPressableAtPoint { x, y } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_long_pressable_at_point", "x": x, "y": y }),
+        ),
+        PressError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        PressError::NoLongPressableForSelector { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_long_pressable_for_selector", "selector": selector }),
+        ),
+        PressError::InvalidTarget { reason } => {
+            validation_error("invalid_target", json!({ "reason": reason }))
         }
     }
 }

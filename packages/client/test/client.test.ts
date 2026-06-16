@@ -35,6 +35,7 @@ interface RouteHandlers {
   focus?: (body: unknown) => Response | Promise<Response>;
   screenshot?: () => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
+  press?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
   state?: () => Response | Promise<Response>;
 }
@@ -65,6 +66,7 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/focus" && handlers.focus) return handlers.focus(body);
       if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
+      if (url.pathname === "/test/press" && handlers.press) return handlers.press(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
       if (url.pathname === "/test/state" && handlers.state) return handlers.state();
       return new Response("not found", { status: 404 });
@@ -396,6 +398,76 @@ describe("E2EClient.swipe", () => {
 
     const client = new E2EClient({ baseUrl: mock.baseUrl });
     await expect(client.swipe({ x: 1, y: 2 }, { x: 3, y: 4 }, 100)).rejects.toBeInstanceOf(
+      NotImplementedError,
+    );
+  });
+});
+
+describe("E2EClient.press", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends selector / hold_ms POST body (xy omitted)", async () => {
+    mock = startMock({
+      press: () => new Response(null, { status: 200 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.press({ selector: "#longpress1", hold_ms: 700 });
+
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.method).toBe("POST");
+    expect(last?.path).toBe("/test/press");
+    // `xy` is `undefined` so it drops out of the JSON body entirely.
+    expect(last?.body).toEqual({ selector: "#longpress1", hold_ms: 700 });
+  });
+
+  test("sends xy / hold_ms POST body (selector omitted)", async () => {
+    mock = startMock({
+      press: () => new Response(null, { status: 200 }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.press({ xy: { x: 80, y: 60 }, hold_ms: 700 });
+
+    const last = mock.receivedBodies.at(-1);
+    expect(last?.body).toEqual({ xy: { x: 80, y: 60 }, hold_ms: 700 });
+  });
+
+  test("throws HttpError on 404 no_long_pressable_at_point", async () => {
+    mock = startMock({
+      press: () =>
+        new Response(JSON.stringify({ error: "no_long_pressable_at_point", x: 1, y: 2 }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    let thrown: unknown;
+    try {
+      await client.press({ xy: { x: 1, y: 2 }, hold_ms: 100 });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(HttpError);
+    expect((thrown as HttpError).status).toBe(404);
+  });
+
+  test("throws NotImplementedError on 501", async () => {
+    mock = startMock({
+      press: () =>
+        new Response(JSON.stringify({ error: "not_implemented", capability: "press" }), {
+          status: 501,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await expect(client.press({ selector: "#longpress1", hold_ms: 100 })).rejects.toBeInstanceOf(
       NotImplementedError,
     );
   });

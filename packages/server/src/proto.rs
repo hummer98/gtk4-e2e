@@ -28,6 +28,7 @@ pub struct Info {
 /// Step 14 appends `Elements` (T018) for `GET /test/elements`.
 /// T019 appends `State` for `GET /test/state` (app-defined state snapshot).
 /// Step 9 (c) appends `Pinch` (T015) for `POST /test/pinch`.
+/// Task 029 appends `Press` (T029) for `POST /test/press` (GestureLongPress).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -42,6 +43,7 @@ pub enum Capability {
     State,
     Pinch,
     Focus,
+    Press,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -117,6 +119,31 @@ pub struct PinchRequest {
     pub center: XY,
     pub scale: f32,
     pub duration_ms: u64,
+}
+
+/// Body of `POST /test/press` (Task 029, T029).
+///
+/// Injects a press → hold(`hold_ms`) → release sequence to fire a
+/// `GtkGestureLongPress` (the `pressed` signal). Exactly one of `selector` /
+/// `xy` must be provided (HTTP 422 otherwise):
+///   - `selector`: resolve the widget by `#name` / `.class`, find a
+///     `GestureLongPress` on it (or an ancestor), and emit at the widget centre.
+///   - `xy`: window-local pixel coordinates; the widget under the point and its
+///     ancestors are searched for a `GestureLongPress`.
+///
+/// `hold_ms = 0` is rejected (`PressError::ZeroHold`); the upper bound is
+/// 10 000 ms (`PressError::HoldTooLong`). Independent fields (option-b) rather
+/// than an untagged enum so the optionality of both targets is explicit.
+///
+/// `Eq` is derivable: every field type (`Option<String>`, `Option<XY>`, `u64`)
+/// is `Eq` (unlike `PinchRequest`, which carries `f32`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct PressRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<XY>,
+    pub hold_ms: u64,
 }
 
 /// Condition long-polled by `/test/wait`.

@@ -27,6 +27,7 @@ import type {
   FocusRequest,
   Info,
   PinchRequest,
+  PressRequest,
   TapTarget,
   TypeRequest,
   WaitCondition,
@@ -225,6 +226,39 @@ export class E2EClient {
       path: "/test/pinch",
       body,
       capability: "pinch",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Inject a press → hold → release sequence to fire a `GestureLongPress`
+   * (`pressed` signal) on the widget matched by `selector`, or at window-local
+   * `xy`. Exactly one of `selector` / `xy` must be provided. `hold_ms` is the
+   * press-to-recognition delay (1..=10000ms); the request resolves once the
+   * long-press has fired server-side.
+   *
+   * Errors:
+   *   - 404 selector_not_found / no_long_pressable_at_point /
+   *         no_long_pressable_for_selector
+   *   - 422 invalid_target / invalid_hold / invalid_selector /
+   *         out_of_bounds / no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async press(opts: {
+    selector?: string;
+    xy?: { x: number; y: number };
+    hold_ms: number;
+  }): Promise<void> {
+    const body: PressRequest = {
+      selector: opts.selector,
+      xy: opts.xy,
+      hold_ms: opts.hold_ms,
+    };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/press",
+      body,
+      capability: "press",
       expect: "void",
     });
   }
