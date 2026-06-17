@@ -732,6 +732,60 @@ async fn screenshot_selector_not_found_returns_404() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_unrealized_target_returns_422() {
+    // issue #7 follow-up: a selector that resolves to a hidden/unmapped widget
+    // returns `unrealized_target` (422), not `no_active_window`.
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest5un")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let hidden = gtk::Label::new(Some("h"));
+    hidden.set_widget_name("hidden1");
+    hidden.set_visible(false);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&hidden)
+        .default_width(32)
+        .default_height(32)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot?selector=%23hidden1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("unrealized_target")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_window_out_of_range_returns_422() {
     if !require_display() {
         return;

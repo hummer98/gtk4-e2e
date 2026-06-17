@@ -21,6 +21,7 @@ use gtk::prelude::*;
 /// | `InvalidSelector`   | 422  |
 /// | `SelectorNotFound`  | 404  |
 /// | `WindowOutOfRange`  | 422  |
+/// | `UnrealizedTarget`  | 422  |
 /// | `EmptyNode`         | 422  |
 /// | `ZeroSize`          | 422  |
 /// | `RenderRealize`     | 500  |
@@ -34,6 +35,12 @@ pub enum ScreenshotError {
     SelectorNotFound { selector: String },
     /// `?window=<idx>` is out of range for `app.windows()` (issue #7).
     WindowOutOfRange { index: usize, count: usize },
+    /// The resolved target exists in the widget tree but is not visible /
+    /// mapped, so it has nothing to paint — e.g. a child of a collapsed
+    /// `GtkRevealer` (`reveal-child=false`). Distinct from `NoActiveWindow`
+    /// so the caller reads it as "make the target visible, then capture"
+    /// rather than "there is no window" (issue #7 follow-up).
+    UnrealizedTarget,
     EmptyNode,
     ZeroSize,
     RenderRealize(String),
@@ -50,6 +57,7 @@ impl std::fmt::Display for ScreenshotError {
             ScreenshotError::WindowOutOfRange { index, count } => {
                 write!(f, "window_out_of_range: {index} (count {count})")
             }
+            ScreenshotError::UnrealizedTarget => write!(f, "unrealized_target"),
             ScreenshotError::EmptyNode => write!(f, "empty_node"),
             ScreenshotError::ZeroSize => write!(f, "zero_size"),
             ScreenshotError::RenderRealize(msg) => write!(f, "render_failed: {msg}"),
@@ -122,8 +130,12 @@ pub fn render_active_window(app: &gtk::Application) -> Result<Vec<u8>, Screensho
 /// Plan §Q2: realize a fresh CairoRenderer on each call (CPU-only, xvfb-safe),
 /// render at the widget's local logical size, then `unrealize()` explicitly.
 fn capture_widget_png(widget: &gtk::Widget) -> Result<Vec<u8>, ScreenshotError> {
+    // A target in the tree but not visible/mapped (e.g. a collapsed
+    // `GtkRevealer` child) has nothing to paint. Report it as `UnrealizedTarget`
+    // so the caller knows to reveal it first — distinct from `NoActiveWindow`,
+    // which means there is no window at all (issue #7 follow-up).
     if !widget.is_visible() || !widget.is_mapped() {
-        return Err(ScreenshotError::NoActiveWindow);
+        return Err(ScreenshotError::UnrealizedTarget);
     }
 
     let width = widget.width() as f32;
