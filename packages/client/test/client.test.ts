@@ -33,7 +33,7 @@ interface RouteHandlers {
   tap?: (body: unknown) => Response | Promise<Response>;
   type?: (body: unknown) => Response | Promise<Response>;
   focus?: (body: unknown) => Response | Promise<Response>;
-  screenshot?: () => Response | Promise<Response>;
+  screenshot?: (url: URL) => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   press?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
@@ -64,7 +64,8 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/focus" && handlers.focus) return handlers.focus(body);
-      if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
+      if (url.pathname === "/test/screenshot" && handlers.screenshot)
+        return handlers.screenshot(url);
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/press" && handlers.press) return handlers.press(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
@@ -573,6 +574,54 @@ describe("E2EClient.screenshot", () => {
     const written = await Bun.file(out).bytes();
     expect(written[0]).toBe(0x89);
     expect(written.byteLength).toBe(png.byteLength);
+  });
+
+  test("forwards selector/window as query params (issue #7)", async () => {
+    const png = pngBytes();
+    let seen: URL | undefined;
+    mock = startMock({
+      screenshot: (url) => {
+        seen = url;
+        return new Response(png, { status: 200, headers: { "content-type": "image/png" } });
+      },
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.screenshot({ selector: "#drawer", window: 1 });
+    expect(seen?.searchParams.get("selector")).toBe("#drawer");
+    expect(seen?.searchParams.get("window")).toBe("1");
+  });
+
+  test("sends no query params when target omitted", async () => {
+    const png = pngBytes();
+    let seen: URL | undefined;
+    mock = startMock({
+      screenshot: (url) => {
+        seen = url;
+        return new Response(png, { status: 200, headers: { "content-type": "image/png" } });
+      },
+    });
+
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    await client.screenshot();
+    expect(seen?.search).toBe("");
+  });
+
+  test("forwards target alongside output path", async () => {
+    const png = pngBytes();
+    let seen: URL | undefined;
+    mock = startMock({
+      screenshot: (url) => {
+        seen = url;
+        return new Response(png, { status: 200, headers: { "content-type": "image/png" } });
+      },
+    });
+
+    const out = join(scratch, "win0.png");
+    const client = new E2EClient({ baseUrl: mock.baseUrl });
+    const returned = await client.screenshot(out, { window: 0 });
+    expect(returned).toBe(out);
+    expect(seen?.searchParams.get("window")).toBe("0");
   });
 
   test("throws NotImplementedError on 501", async () => {

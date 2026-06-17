@@ -15,15 +15,25 @@ use gtk::prelude::*;
 /// Mapped to HTTP status codes in `http.rs::screenshot_error_response`
 /// (plan §Q4):
 ///
-/// | error             | http |
-/// |-------------------|------|
-/// | `NoActiveWindow`  | 422  |
-/// | `EmptyNode`       | 422  |
-/// | `ZeroSize`        | 422  |
-/// | `RenderRealize`   | 500  |
+/// | error               | http |
+/// |---------------------|------|
+/// | `NoActiveWindow`    | 422  |
+/// | `InvalidSelector`   | 422  |
+/// | `SelectorNotFound`  | 404  |
+/// | `WindowOutOfRange`  | 422  |
+/// | `EmptyNode`         | 422  |
+/// | `ZeroSize`          | 422  |
+/// | `RenderRealize`     | 500  |
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenshotError {
     NoActiveWindow,
+    /// `?selector=` failed to parse (issue #7).
+    InvalidSelector { reason: String },
+    /// `?selector=` parsed but matched no widget across `app.windows()`
+    /// (issue #7). Carries the original selector text for the 404 body.
+    SelectorNotFound { selector: String },
+    /// `?window=<idx>` is out of range for `app.windows()` (issue #7).
+    WindowOutOfRange { index: usize, count: usize },
     EmptyNode,
     ZeroSize,
     RenderRealize(String),
@@ -33,6 +43,13 @@ impl std::fmt::Display for ScreenshotError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ScreenshotError::NoActiveWindow => write!(f, "no_active_window"),
+            ScreenshotError::InvalidSelector { reason } => write!(f, "invalid_selector: {reason}"),
+            ScreenshotError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            ScreenshotError::WindowOutOfRange { index, count } => {
+                write!(f, "window_out_of_range: {index} (count {count})")
+            }
             ScreenshotError::EmptyNode => write!(f, "empty_node"),
             ScreenshotError::ZeroSize => write!(f, "zero_size"),
             ScreenshotError::RenderRealize(msg) => write!(f, "render_failed: {msg}"),
@@ -41,6 +58,54 @@ impl std::fmt::Display for ScreenshotError {
 }
 
 impl std::error::Error for ScreenshotError {}
+
+/// Render a screenshot target as PNG bytes (issue #7).
+///
+/// Target precedence — the first non-`None` argument wins:
+///   1. `selector`: resolve a widget across **all** `app.windows()` (active or
+///      not, including open popovers, which are children in the widget tree)
+///      via the shared `parse_selector` + `find_first` used by `/test/elements`
+///      and `/test/type`, then offscreen-render that widget with
+///      `WidgetPaintable` — so non-active windows and separate popover surfaces
+///      are captured (the active-window-only path could not reach them).
+///   2. `window`: index into `app.windows()` (creation order) to capture a
+///      specific toplevel.
+///   3. neither: the active window — the historical default.
+///
+/// `selector` parse failure → `InvalidSelector`; no match → `SelectorNotFound`;
+/// out-of-range index → `WindowOutOfRange`.
+pub fn render_target(
+    app: &gtk::Application,
+    selector: Option<&str>,
+    window: Option<usize>,
+) -> Result<Vec<u8>, ScreenshotError> {
+    use crate::tree::{find_first, parse_selector, GtkTree};
+
+    if let Some(sel_str) = selector {
+        let sel = parse_selector(sel_str).map_err(|e| ScreenshotError::InvalidSelector {
+            reason: e.reason.to_string(),
+        })?;
+        let widget = find_first(GtkTree { app }, &sel).ok_or_else(|| {
+            ScreenshotError::SelectorNotFound {
+                selector: sel_str.to_string(),
+            }
+        })?;
+        return capture_widget_png(&widget);
+    }
+
+    if let Some(index) = window {
+        let windows = app.windows();
+        let win = windows
+            .get(index)
+            .ok_or(ScreenshotError::WindowOutOfRange {
+                index,
+                count: windows.len(),
+            })?;
+        return capture_widget_png(win.upcast_ref::<gtk::Widget>());
+    }
+
+    render_active_window(app)
+}
 
 /// Render the active window of `app` as a PNG and return its bytes.
 ///

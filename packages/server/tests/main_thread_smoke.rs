@@ -101,7 +101,11 @@ fn screenshot_cmd_roundtrip() {
     let cmd_tx_clone = cmd_tx.clone();
     rt.spawn(async move {
         cmd_tx_clone
-            .send(MainCmd::Screenshot { reply: reply_tx })
+            .send(MainCmd::Screenshot {
+                selector: None,
+                window: None,
+                reply: reply_tx,
+            })
             .await
             .expect("worker → main_thread send should succeed");
     });

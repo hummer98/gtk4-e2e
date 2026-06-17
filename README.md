@@ -39,7 +39,7 @@ Each capability is advertised in `GET /test/info` and exposed both as an HTTP/We
 | `swipe`      | `POST /test/swipe`      | `swipe <x1,y1> <x2,y2>`      | Animate a scroll gesture over the nearest `ScrolledWindow` |
 | `pinch`      | `POST /test/pinch`      | `pinch <x,y> <scale>`        | Drive a `GestureZoom` (zoom in/out) |
 | `press`      | `POST /test/press`      | `press <selector\|x,y> <hold_ms>` | Fire a `GestureLongPress` (press→hold→release) |
-| `screenshot` | `GET /test/screenshot`  | `screenshot <out\|--baseline>` | Capture the active window as PNG / visual-regression diff |
+| `screenshot` | `GET /test/screenshot`  | `screenshot <out\|--baseline> [--selector\|--window]` | Capture the active window — or a `--selector` widget / `--window` toplevel (non-active窓・popover も撮れる) — as PNG / visual-regression diff |
 | `elements`   | `GET /test/elements`    | `elements [--selector …]`    | Walk the widget tree (+ opt-in GObject property read) |
 | `wait`       | `POST /test/wait`       | `wait visible\|state-eq\|app-state-eq` | Long-poll until a condition holds |
 | `events`     | `WS /test/events`       | `events`                     | Subscribe to a state-change / property / log NDJSON stream |
@@ -239,6 +239,12 @@ bunx gtk4-e2e screenshot main-window --baseline ./baselines/x.png --threshold 0.
 
 # Create or overwrite the baseline with the current screenshot.
 bunx gtk4-e2e screenshot main-window --baseline ./baselines/x.png --update-baseline
+
+# Target a non-active window or popover (issue #7).
+# --selector: 全窓 (popover 含む) を横断して widget を解決し WidgetPaintable で撮る。
+bunx gtk4-e2e screenshot drawer --selector '#settings-drawer' --baseline ./baselines/drawer.png
+# --window: トップレベル窓を index (app.windows() 生成順) で指定。--selector 優先。
+bunx gtk4-e2e screenshot win1 --window 1 --baseline ./baselines/win1.png
 ```
 
 The `<path>` argument supplies **only the directory** that holds baselines.

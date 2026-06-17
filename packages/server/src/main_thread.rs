@@ -65,8 +65,12 @@ pub enum MainCmd {
         condition: WaitCondition,
         reply: oneshot::Sender<WaitTickResult>,
     },
-    /// Capture the active window as PNG bytes.
+    /// Capture a screenshot as PNG bytes (issue #7). Target precedence:
+    /// `selector` > `window` index > active window. `None`/`None` preserves
+    /// the historical active-window behaviour.
     Screenshot {
+        selector: Option<String>,
+        window: Option<usize>,
         reply: oneshot::Sender<Result<Vec<u8>, ScreenshotError>>,
     },
     /// Insert text into a widget (Step 9, T013).
@@ -170,9 +174,15 @@ fn handle_cmd(cmd: MainCmd) {
                 )));
             let _ = reply.send(outcome);
         }
-        MainCmd::Screenshot { reply } => {
-            let outcome = with_app(crate::snapshot::render_active_window)
-                .unwrap_or(Err(ScreenshotError::NoActiveWindow));
+        MainCmd::Screenshot {
+            selector,
+            window,
+            reply,
+        } => {
+            let outcome = with_app(|app| {
+                crate::snapshot::render_target(app, selector.as_deref(), window)
+            })
+            .unwrap_or(Err(ScreenshotError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
         MainCmd::Type { request, reply } => {
