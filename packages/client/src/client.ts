@@ -51,7 +51,25 @@ interface ClientOptions {
   token?: string;
 }
 
-export interface ClientExpectScreenshotOptions extends ExpectScreenshotOptions {
+/**
+ * Picks what `screenshot()` / `expectScreenshot()` capture (issue #7).
+ * Both fields omitted → the active window (historical default).
+ */
+export interface ScreenshotTarget {
+  /**
+   * Capture the first widget matching this selector (`#name` / `.class`),
+   * resolved across **all** toplevel windows — including non-active windows
+   * and open popovers (separate surfaces the active-window path can't reach).
+   */
+  selector?: string;
+  /**
+   * Capture a specific toplevel by index into the app's window list
+   * (creation order). Ignored when `selector` is set.
+   */
+  window?: number;
+}
+
+export interface ClientExpectScreenshotOptions extends ExpectScreenshotOptions, ScreenshotTarget {
   /**
    * Absolute path to the calling test file. When provided, the wrapper
    * skips stack inspection and resolves baselines under
@@ -352,14 +370,29 @@ export class E2EClient {
     });
   }
 
-  async screenshot(): Promise<Uint8Array>;
-  async screenshot(path: string): Promise<string>;
-  async screenshot(path?: string): Promise<Uint8Array | string> {
+  async screenshot(opts?: ScreenshotTarget): Promise<Uint8Array>;
+  async screenshot(path: string, opts?: ScreenshotTarget): Promise<string>;
+  async screenshot(
+    pathOrOpts?: string | ScreenshotTarget,
+    maybeOpts?: ScreenshotTarget,
+  ): Promise<Uint8Array | string> {
+    // Overload resolution: a leading string is the output path (write mode);
+    // otherwise the first arg is the target options (return-bytes mode).
+    const path = typeof pathOrOpts === "string" ? pathOrOpts : undefined;
+    const target = typeof pathOrOpts === "string" ? maybeOpts : pathOrOpts;
+
+    // issue #7: `selector` / `window` pick a non-active window or popover
+    // surface. Omitted → server captures the active window (historical default).
+    const query: Record<string, string> = {};
+    if (target?.selector !== undefined) query.selector = target.selector;
+    if (target?.window !== undefined) query.window = String(target.window);
+
     const bytes = await this._request<Uint8Array>({
       method: "GET",
       path: "/test/screenshot",
       capability: "screenshot",
       expect: "bytes",
+      query,
     });
     if (path === undefined) return bytes;
     await Bun.write(path, bytes);
@@ -422,7 +455,9 @@ export class E2EClient {
 
     const failOnMissing = opts.failOnMissing ?? env.CI === "true";
 
-    const actual = await this.screenshot();
+    // issue #7: forward selector/window so visual diffs can target a
+    // non-active window or popover surface, not just the active window.
+    const actual = await this.screenshot({ selector: opts.selector, window: opts.window });
     return expectScreenshot(actual, fullName, {
       threshold: opts.threshold,
       includeAA: opts.includeAA,

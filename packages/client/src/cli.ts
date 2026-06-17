@@ -44,6 +44,7 @@ Subcommands:
   screenshot <out.png>                                 GET /test/screenshot → save to file
   screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
                   [--threshold <0.0-1.0>] [--update-baseline]
+                  [--selector <s>] [--window <idx>]    target a non-active window / popover
   elements [--selector <s>] [--max-depth <n>] [--props <names>]
                                     GET /test/elements → JSON tree to stdout
   wait visible <selector>           POST /test/wait — long-poll until visible
@@ -65,8 +66,9 @@ Flags (apply to all subcommands):
   --display <:N>  X11 display for record start (default: $DISPLAY)
   --fps <n>       recorder framerate (default: 30)
   --duration <ms> swipe gesture duration in ms (default: 300)
-  --selector <s>  selector for elements (e.g. #input1 or .primary)
+  --selector <s>  selector for elements / screenshot (e.g. #input1 or .primary)
   --max-depth <n> cap subtree depth for elements (0 = root only)
+  --window <idx>  screenshot: capture toplevel window by index (app.windows())
   --props <names> comma-separated GObject property names to read per matched
                   widget (elements). Pass '*' to dump every readable property
                   on each match. Failure sentinels surface inline:
@@ -92,6 +94,7 @@ interface ParsedArgs {
     duration?: number;
     selector?: string;
     maxDepth?: number;
+    window?: number;
     props?: string[];
     timeout?: number;
     count?: number;
@@ -192,6 +195,15 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!Number.isFinite(n) || n < 0)
         throw new ArgvError(`--max-depth: not a non-negative integer: ${v}`);
       result.flags.maxDepth = n;
+      continue;
+    }
+    if (a === "--window") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--window requires a value");
+      const n = Number.parseInt(v, 10);
+      if (!Number.isFinite(n) || n < 0)
+        throw new ArgvError(`--window: not a non-negative integer: ${v}`);
+      result.flags.window = n;
       continue;
     }
     if (a === "--props") {
@@ -514,10 +526,13 @@ async function runScreenshot(parsed: ParsedArgs): Promise<number> {
   const positional = parsed.positional[0];
   const client = await buildClient(parsed);
 
+  // issue #7: `--selector` / `--window` target a non-active window or popover.
+  const target = { selector: parsed.flags.selector, window: parsed.flags.window };
+
   // Save mode: backward-compatible (positional is treated as the output path).
   const baseline = parsed.flags.baseline;
   if (baseline === undefined) {
-    const path = await client.screenshot(positional);
+    const path = await client.screenshot(positional, target);
     process.stdout.write(`${path}\n`);
     return 0;
   }
@@ -536,6 +551,8 @@ async function runScreenshot(parsed: ParsedArgs): Promise<number> {
     threshold: parsed.flags.threshold,
     updateBaseline: parsed.flags.updateBaseline,
     failOnMissing: true,
+    selector: target.selector,
+    window: target.window,
   });
   process.stdout.write(`${JSON.stringify({ name: positional, ...result }, null, 2)}\n`);
   return result.match ? 0 : 1;

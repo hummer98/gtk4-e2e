@@ -70,7 +70,21 @@ border 等) を screenshot で決定論的に検証したいときに使う。`f
 
 ```bash
 bunx gtk4-e2e screenshot /tmp/now.png
+# 非アクティブ窓・popover を撮る (issue #7)。
+# --selector: 全窓 (popover 含む) を横断して widget を解決し、その部分木だけを撮る。
+bunx gtk4-e2e screenshot /tmp/drawer.png --selector '#settings-drawer'
+# --window: トップレベル窓を index (app.windows() の生成順) で指定。
+bunx gtk4-e2e screenshot /tmp/win1.png --window 1
 ```
+
+`active_window()` 固定では撮れなかった「対象 widget が非アクティブ窓にある」
+「popover が別 surface」のケースに対応する。`--selector` 指定時は WidgetPaintable
+でオフスクリーン描画するので compositor 非依存で確実に撮れる。`--selector` と
+`--window` 併用時は `--selector` が優先。`--selector` / `--window` は diff モード
+(`--baseline`) でも使える。
+
+> 描画フレームが一時的に空の場合 (`empty_node`, HTTP 422) はリトライで回避する
+> (active_window 経路と同じ挙動)。
 
 ### screenshot (視覚回帰 diff)
 

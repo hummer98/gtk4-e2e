@@ -581,6 +581,203 @@ async fn screenshot_endpoint_returns_png() {
     common::pump_glib(32);
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_selector_captures_named_widget_png() {
+    // issue #7: ?selector= resolves a widget across app.windows() and renders
+    // it offscreen — even when it is not the active window's root.
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest5sel")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let label = gtk::Label::new(Some("scr"));
+    label.set_widget_name("label1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&label)
+        .default_width(64)
+        .default_height(48)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot?selector=%23label1")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .and_then(|v| v.to_str().ok()),
+        Some("image/png")
+    );
+    let bytes = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+    assert_eq!(
+        &bytes[..8],
+        b"\x89PNG\r\n\x1a\n",
+        "missing PNG signature in first 8 bytes"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test]
+async fn screenshot_invalid_selector_returns_422() {
+    // Parse validation happens in the HTTP layer before crossing into GTK, so
+    // no display is required.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot?selector=@bad")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_selector")
+    );
+}
+
+#[tokio::test]
+async fn screenshot_invalid_window_returns_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot?window=abc")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_window"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_selector_not_found_returns_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest5nf")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .default_width(32)
+        .default_height(32)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot?selector=%23nope")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("selector_not_found")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_window_out_of_range_returns_422() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest5oor")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .default_width(32)
+        .default_height(32)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/test/screenshot?window=9")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("window_out_of_range")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
 // ----- Step 9: type capability -----
 
 #[tokio::test]

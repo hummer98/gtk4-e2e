@@ -73,7 +73,7 @@ interface RouteHandlers {
   tap?: (body: unknown) => Response | Promise<Response>;
   type?: (body: unknown) => Response | Promise<Response>;
   focus?: (body: unknown) => Response | Promise<Response>;
-  screenshot?: () => Response | Promise<Response>;
+  screenshot?: (url: URL) => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   press?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
@@ -104,7 +104,8 @@ function startMock(handlers: RouteHandlers): MockServer {
       if (url.pathname === "/test/tap" && handlers.tap) return handlers.tap(body);
       if (url.pathname === "/test/type" && handlers.type) return handlers.type(body);
       if (url.pathname === "/test/focus" && handlers.focus) return handlers.focus(body);
-      if (url.pathname === "/test/screenshot" && handlers.screenshot) return handlers.screenshot();
+      if (url.pathname === "/test/screenshot" && handlers.screenshot)
+        return handlers.screenshot(url);
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/press" && handlers.press) return handlers.press(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
@@ -441,6 +442,32 @@ describe("cli screenshot", () => {
     expect(result.exitCode).toBe(0);
     const bytes = await Bun.file(out).bytes();
     expect(bytes[0]).toBe(0x89);
+  });
+
+  test("forwards --selector / --window as query params (issue #7)", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    let seen: URL | undefined;
+    mock = startMock({
+      screenshot: (url) => {
+        seen = url;
+        return new Response(png, { status: 200, headers: { "content-type": "image/png" } });
+      },
+    });
+
+    const out = join(scratch, "drawer.png");
+    const result = await runCli([
+      "screenshot",
+      out,
+      "--selector",
+      "#drawer",
+      "--window",
+      "1",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(seen?.searchParams.get("selector")).toBe("#drawer");
+    expect(seen?.searchParams.get("window")).toBe("1");
   });
 });
 

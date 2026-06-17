@@ -416,11 +416,32 @@ async fn post_wait(State(state): State<AppState>, body: String) -> Response {
     }
 }
 
-async fn get_screenshot(State(state): State<AppState>) -> Response {
+async fn get_screenshot(
+    State(state): State<AppState>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> Response {
+    let q = match parse_screenshot_query(raw.as_deref().unwrap_or("")) {
+        Ok(q) => q,
+        Err(resp) => return resp,
+    };
+
+    // Pre-validate the selector before crossing into the GLib main thread so a
+    // parse error surfaces as 422 invalid_selector rather than a 404 (mirror of
+    // `get_elements` / `post_type`). `render_target` re-parses defensively.
+    if let Some(selector) = q.selector.as_deref() {
+        if let Err(e) = parse_selector(selector) {
+            return validation_error("invalid_selector", json!({"reason": e.reason}));
+        }
+    }
+
     let (tx, rx) = oneshot::channel();
     if state
         .cmd_tx
-        .send(MainCmd::Screenshot { reply: tx })
+        .send(MainCmd::Screenshot {
+            selector: q.selector,
+            window: q.window,
+            reply: tx,
+        })
         .await
         .is_err()
     {
@@ -692,10 +713,66 @@ fn elements_error_response(e: ElementsError) -> Response {
 fn screenshot_error_response(e: ScreenshotError) -> Response {
     match e {
         ScreenshotError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        ScreenshotError::InvalidSelector { reason } => {
+            validation_error("invalid_selector", json!({ "reason": reason }))
+        }
+        ScreenshotError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        ScreenshotError::WindowOutOfRange { index, count } => validation_error(
+            "window_out_of_range",
+            json!({ "index": index, "count": count }),
+        ),
         ScreenshotError::EmptyNode => validation_error("empty_node", json!({})),
         ScreenshotError::ZeroSize => validation_error("zero_size", json!({})),
         ScreenshotError::RenderRealize(msg) => server_error(&format!("render_failed: {msg}")),
     }
+}
+
+struct ScreenshotQuery {
+    selector: Option<String>,
+    window: Option<usize>,
+}
+
+#[allow(clippy::result_large_err)] // mirrors `parse_elements_query`: axum Response is the error path.
+fn parse_screenshot_query(raw: &str) -> Result<ScreenshotQuery, Response> {
+    let mut selector: Option<String> = None;
+    let mut window: Option<usize> = None;
+    if !raw.is_empty() {
+        for pair in raw.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let (k, v) = match pair.split_once('=') {
+                Some((k, v)) => (k, v),
+                None => (pair, ""),
+            };
+            let value = match decode_query_component(v) {
+                Some(s) => s,
+                None => {
+                    return Err(validation_error(
+                        "invalid_query",
+                        json!({ "reason": "malformed_percent_encoding", "key": k }),
+                    ));
+                }
+            };
+            match k {
+                "selector" => selector = Some(value),
+                "window" => match value.parse::<usize>() {
+                    Ok(n) => window = Some(n),
+                    Err(_) => {
+                        return Err(validation_error(
+                            "invalid_window",
+                            json!({ "reason": "non_integer" }),
+                        ));
+                    }
+                },
+                _ => {}
+            }
+        }
+    }
+    Ok(ScreenshotQuery { selector, window })
 }
 
 fn bad_request(reason: &str) -> Response {

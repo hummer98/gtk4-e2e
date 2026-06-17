@@ -10,7 +10,7 @@ mod common;
 
 use gtk4_e2e_server::gtk;
 use gtk4_e2e_server::gtk::prelude::*;
-use gtk4_e2e_server::snapshot::{render_active_window, ScreenshotError};
+use gtk4_e2e_server::snapshot::{render_active_window, render_target, ScreenshotError};
 
 fn require_display() -> bool {
     if !common::ensure_gtk_init() {
@@ -80,4 +80,109 @@ fn render_no_active_window_errors() {
 
     let outcome = render_active_window(&app);
     assert_eq!(outcome, Err(ScreenshotError::NoActiveWindow));
+}
+
+#[test]
+fn render_target_by_selector_returns_png() {
+    // issue #7: a `?selector=` target resolves across app.windows() and
+    // offscreen-renders that widget, independent of which window is active.
+    if !require_display() {
+        return;
+    }
+
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.snaprender3")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+
+    let label = gtk::Label::new(Some("snap"));
+    label.set_widget_name("target1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .child(&label)
+        .default_width(64)
+        .default_height(48)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    let bytes = render_target(&app, Some("#target1"), None)
+        .expect("selector render should succeed for a mapped widget");
+    assert_eq!(&bytes[..8], b"\x89PNG\r\n\x1a\n");
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn render_target_selector_not_found_errors() {
+    if !require_display() {
+        return;
+    }
+
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.snaprender4")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .default_width(32)
+        .default_height(32)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    assert_eq!(
+        render_target(&app, Some("#missing"), None),
+        Err(ScreenshotError::SelectorNotFound {
+            selector: "#missing".to_string()
+        })
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn render_target_invalid_selector_errors() {
+    if !require_display() {
+        return;
+    }
+
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.snaprender5")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+
+    match render_target(&app, Some("@bad"), None) {
+        Err(ScreenshotError::InvalidSelector { .. }) => {}
+        other => panic!("expected InvalidSelector, got {other:?}"),
+    }
+}
+
+#[test]
+fn render_target_window_out_of_range_errors() {
+    if !require_display() {
+        return;
+    }
+
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.snaprender6")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .default_width(32)
+        .default_height(32)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    assert_eq!(
+        render_target(&app, None, Some(9)),
+        Err(ScreenshotError::WindowOutOfRange { index: 9, count: 1 })
+    );
+
+    window.close();
+    common::pump_glib(32);
 }
