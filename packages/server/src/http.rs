@@ -724,6 +724,7 @@ fn screenshot_error_response(e: ScreenshotError) -> Response {
             "window_out_of_range",
             json!({ "index": index, "count": count }),
         ),
+        ScreenshotError::UnrealizedTarget => validation_error("unrealized_target", json!({})),
         ScreenshotError::EmptyNode => validation_error("empty_node", json!({})),
         ScreenshotError::ZeroSize => validation_error("zero_size", json!({})),
         ScreenshotError::RenderRealize(msg) => server_error(&format!("render_failed: {msg}")),

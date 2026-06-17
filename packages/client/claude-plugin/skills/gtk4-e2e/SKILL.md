@@ -84,7 +84,9 @@ bunx gtk4-e2e screenshot /tmp/win1.png --window 1
 (`--baseline`) でも使える。
 
 > 描画フレームが一時的に空の場合 (`empty_node`, HTTP 422) はリトライで回避する
-> (active_window 経路と同じ挙動)。
+> (active_window 経路と同じ挙動)。対象 widget がツリーに在るが未 realize/unmapped
+> (例: 閉じた `GtkRevealer` の子) なら `unrealized_target` (HTTP 422) が返る
+> → 先に widget を可視化してから撮ること。
 
 ### screenshot (視覚回帰 diff)
 

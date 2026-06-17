@@ -161,6 +161,42 @@ fn render_target_invalid_selector_errors() {
 }
 
 #[test]
+fn render_target_unrealized_widget_errors() {
+    // issue #7 follow-up: a widget that exists in the tree but is not
+    // visible/mapped (here: an explicitly hidden label) reports
+    // `UnrealizedTarget`, NOT `NoActiveWindow` — so the caller knows to
+    // reveal it first rather than think there is no window.
+    if !require_display() {
+        return;
+    }
+
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.snaprender7")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+
+    let hidden = gtk::Label::new(Some("hidden"));
+    hidden.set_widget_name("hidden1");
+    hidden.set_visible(false);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .child(&hidden)
+        .default_width(64)
+        .default_height(48)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    assert_eq!(
+        render_target(&app, Some("#hidden1"), None),
+        Err(ScreenshotError::UnrealizedTarget)
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
 fn render_target_window_out_of_range_errors() {
     if !require_display() {
         return;
