@@ -1,0 +1,15 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Body of `POST /test/key` (issue #10 companion).\n\nDelivers a single key to the active window so tests can dismiss modal UI (an autohide `GtkPopover` confirm dialog) without relying on a click that might re-enter the modal grab. MVP supports `key = \"Escape\"`; the active window's open autohide popover is popped down (the documented Escape behaviour). Unknown key names are rejected with 422 `unsupported_key`.",
+  "properties": {
+    "key": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "key"
+  ],
+  "title": "KeyRequest",
+  "type": "object"
+}

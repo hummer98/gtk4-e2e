@@ -81,6 +81,73 @@ impl std::error::Error for TapError {}
 /// in GTK4 (unlike GTK3), but `gtk::ToggleButton` *is*, so we check
 /// `ToggleButton` before `Button`.
 pub fn tap_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), TapError> {
+    let plan = validate_tap(widget, selector)?;
+    plan.fire();
+    Ok(())
+}
+
+/// A validated tap, split from its side-effect so the action can either fire
+/// synchronously ([`TapPlan::fire`], used by direct callers / unit tests) or be
+/// deferred to a GLib idle callback ([`TapPlan::run_deferred`], used by the
+/// HTTP dispatch path).
+///
+/// Issue #10: firing `emit_clicked()` / `set_active()` synchronously from
+/// inside the GLib command-receiver loop is fine for normal widgets, but when
+/// the target lives inside an **autohide (modal) `GtkPopover`**, the app's
+/// `clicked` handler typically pops the popover down — and doing that
+/// *synchronously while the popover's modal grab is still active* re-enters the
+/// grab teardown on Wayland and can stall the receiver loop before its
+/// `reply.send`. The HTTP caller then never gets a response (curl hangs) and
+/// the broken grab leaves the UI unresponsive. Deferring the action to an idle
+/// callback lets the current dispatch unwind first, so the reply is always sent
+/// and the grab tears down cleanly on the next loop iteration.
+pub struct TapPlan {
+    widget: gtk::Widget,
+}
+
+impl TapPlan {
+    /// Perform the tap action now (synchronous). Used by [`tap_widget`] and the
+    /// integration tests that assert the handler fired immediately.
+    pub fn fire(&self) {
+        let widget = &self.widget;
+        if let Some(switch) = widget.downcast_ref::<gtk::Switch>() {
+            switch.set_active(!switch.is_active());
+        } else if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
+            check.set_active(!check.is_active());
+        } else if let Some(toggle) = widget.downcast_ref::<gtk::ToggleButton>() {
+            toggle.set_active(!toggle.is_active());
+        } else if let Some(button) = widget.downcast_ref::<gtk::Button>() {
+            button.emit_clicked();
+        }
+        // `validate_tap` already rejected unsupported kinds, so the final
+        // `else` is unreachable; nothing to do.
+    }
+
+    /// Schedule the tap action on a GLib idle callback and send `reply` once it
+    /// has fired. Must be called on the GLib main thread. The reply carries
+    /// `Ok(())` because validation already succeeded; the idle callback only
+    /// performs the (possibly grab-reentrant) side-effect. See [`TapPlan`].
+    pub fn run_deferred(self, reply: tokio::sync::oneshot::Sender<Result<(), TapError>>) {
+        let mut reply_slot = Some(reply);
+        glib::idle_add_local_once(move || {
+            self.fire();
+            if let Some(reply) = reply_slot.take() {
+                let _ = reply.send(Ok(()));
+            }
+        });
+    }
+}
+
+/// Run the synchronous tap guards (visibility / sensitivity / kind) and return
+/// a [`TapPlan`] for the resolved action, or a [`TapError`] when a guard fails.
+///
+/// Pure with respect to the widget: it reads state and downcasts but does not
+/// fire `emit_clicked()` / `set_active()`. Splitting validation from the action
+/// lets the HTTP path reply synchronously on error yet defer the side-effect
+/// (issue #10). Supported kinds mirror the historical `tap_widget` dispatch
+/// order (`Switch` / `CheckButton` / `ToggleButton` before `Button`, since a
+/// `ToggleButton` *is* a `Button` in GTK4).
+pub fn validate_tap(widget: &gtk::Widget, selector: Option<&str>) -> Result<TapPlan, TapError> {
     if !widget.is_visible() || !widget.is_mapped() {
         return Err(TapError::WidgetNotVisible {
             selector: selector.map(str::to_string),
@@ -91,24 +158,17 @@ pub fn tap_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), Ta
             selector: selector.map(str::to_string),
         });
     }
-    if let Some(switch) = widget.downcast_ref::<gtk::Switch>() {
-        switch.set_active(!switch.is_active());
-        return Ok(());
+    let supported = widget.downcast_ref::<gtk::Switch>().is_some()
+        || widget.downcast_ref::<gtk::CheckButton>().is_some()
+        || widget.downcast_ref::<gtk::ToggleButton>().is_some()
+        || widget.downcast_ref::<gtk::Button>().is_some();
+    if !supported {
+        return Err(TapError::UnsupportedWidget {
+            widget_type: widget.type_().name().to_string(),
+        });
     }
-    if let Some(check) = widget.downcast_ref::<gtk::CheckButton>() {
-        check.set_active(!check.is_active());
-        return Ok(());
-    }
-    if let Some(toggle) = widget.downcast_ref::<gtk::ToggleButton>() {
-        toggle.set_active(!toggle.is_active());
-        return Ok(());
-    }
-    if let Some(button) = widget.downcast_ref::<gtk::Button>() {
-        button.emit_clicked();
-        return Ok(());
-    }
-    Err(TapError::UnsupportedWidget {
-        widget_type: widget.type_().name().to_string(),
+    Ok(TapPlan {
+        widget: widget.clone(),
     })
 }
 
@@ -1005,6 +1065,87 @@ pub fn find_long_press_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::Ges
             }
         }
         cur = parent;
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Key (issue #10 companion: POST /test/key)
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the `key` pipeline.
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error            | http |
+/// |------------------|------|
+/// | `UnsupportedKey` | 422  |
+/// | `NoActiveWindow` | 422  |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyError {
+    UnsupportedKey { key: String },
+    NoActiveWindow,
+}
+
+impl std::fmt::Display for KeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyError::UnsupportedKey { key } => write!(f, "unsupported_key: {key}"),
+            KeyError::NoActiveWindow => write!(f, "no_active_window"),
+        }
+    }
+}
+
+impl std::error::Error for KeyError {}
+
+/// Deliver a single key to the active window (MVP: `"Escape"` only).
+///
+/// Issue #10: `/test/key` is the safe escape hatch for dismissing a modal
+/// `GtkPopover` from a test without clicking a child widget (which can re-enter
+/// the modal grab). For `Escape` we reproduce the documented popover behaviour
+/// directly — pop down the top-most open autohide popover under the active
+/// window — rather than synthesizing a `GdkEvent` (GTK4 removed public event
+/// construction, and emitting `key-pressed` on a controller does not trigger
+/// GTK's default Escape-to-close handling).
+///
+/// `popdown()` is the documented effect of Escape on an autohide popover and is
+/// grab-safe: GTK tears the grab down internally. When no popover is open the
+/// call is a no-op success (the modal is already gone), so callers can issue
+/// `/test/key Escape` unconditionally as cleanup.
+///
+/// Returns `UnsupportedKey` for any key name other than `"Escape"` /
+/// `"escape"`; the MVP intentionally does not synthesize arbitrary keystrokes.
+pub fn send_key(window: &gtk::Window, key: &str) -> Result<(), KeyError> {
+    if !key.eq_ignore_ascii_case("escape") {
+        return Err(KeyError::UnsupportedKey {
+            key: key.to_string(),
+        });
+    }
+    if let Some(popover) = find_open_autohide_popover(&window.clone().upcast()) {
+        popover.popdown();
+    }
+    Ok(())
+}
+
+/// DFS for the first mapped autohide `GtkPopover` in `root`'s widget subtree.
+///
+/// A `GtkPopover` is a child widget of the toplevel in the GTK4 hierarchy (it
+/// presents on its own surface but is still reachable via
+/// `first_child` / `next_sibling`), so the same walk used by `find_first`
+/// reaches it. We only return popovers that are both mapped (open) and
+/// autohide (modal) — those are the ones an Escape would dismiss.
+pub fn find_open_autohide_popover(root: &gtk::Widget) -> Option<gtk::Popover> {
+    if let Some(popover) = root.downcast_ref::<gtk::Popover>() {
+        if popover.is_mapped() && popover.is_autohide() {
+            return Some(popover.clone());
+        }
+    }
+    let mut cur = root.first_child();
+    while let Some(child) = cur {
+        if let Some(found) = find_open_autohide_popover(&child) {
+            return Some(found);
+        }
+        cur = child.next_sibling();
     }
     None
 }

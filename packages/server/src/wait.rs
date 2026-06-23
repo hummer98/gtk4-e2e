@@ -15,8 +15,8 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
 use crate::input::{
-    focus_widget, resolve_xy, tap_widget, type_text, validate_press, validate_press_widget,
-    FocusError, PinchError, PressError, SwipeError, TapError, TypeError,
+    focus_widget, resolve_xy, send_key, type_text, validate_press, validate_press_widget,
+    validate_tap, FocusError, KeyError, PinchError, PressError, SwipeError, TapError, TypeError,
 };
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
 use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
@@ -127,35 +127,75 @@ pub fn eval_app_state_eq(app_state: &AppDefinedState, path: &str, value: &Value)
 // GTK-bound entry points (called from the GLib main thread via MainCmd)
 // ------------------------------------------------------------
 
+/// GTK-bound entry point for `MainCmd::Tap`.
+///
+/// Validates synchronously (selector resolution + visibility / sensitivity /
+/// kind via `validate_tap`), then **defers the tap action to a GLib idle
+/// callback** and replies `Ok(())` from that callback (issue #10). Validation
+/// errors are replied synchronously. Deferral is what keeps a tap on a button
+/// inside an autohide (modal) `GtkPopover` from stalling the receiver loop:
+/// the app's `clicked` → `popdown()` then runs after the current dispatch has
+/// unwound, so the grab tears down cleanly and the reply always reaches the
+/// HTTP caller. See `input::TapPlan`.
 pub(crate) fn dispatch_tap(
     app: &crate::gtk::Application,
     target: &TapTarget,
-) -> Result<(), TapError> {
-    match target {
+    reply: tokio::sync::oneshot::Sender<Result<(), TapError>>,
+) {
+    let plan = match target {
         TapTarget::Selector { selector } => {
-            let sel = parse_selector(selector).map_err(|e| TapError::SelectorNotFound {
-                // The HTTP layer already validates `invalid_selector`, but a
-                // `tap` targeting an unparseable name should still surface as
-                // 422. We cannot construct that variant here, so propagate
-                // SelectorNotFound and let the validator catch the case
-                // earlier in the request lifecycle.
-                selector: format!("{}: {}", selector, e.reason),
-            })?;
+            let sel = match parse_selector(selector) {
+                Ok(s) => s,
+                Err(e) => {
+                    // The HTTP layer already validates `invalid_selector`, but a
+                    // `tap` targeting an unparseable name should still surface
+                    // as an error here. We cannot construct the 422 variant, so
+                    // propagate SelectorNotFound; the validator catches the case
+                    // earlier in the request lifecycle.
+                    let _ = reply.send(Err(TapError::SelectorNotFound {
+                        selector: format!("{}: {}", selector, e.reason),
+                    }));
+                    return;
+                }
+            };
             let tree = GtkTree { app };
-            let widget = find_first(tree, &sel).ok_or_else(|| TapError::SelectorNotFound {
-                selector: selector.clone(),
-            })?;
-            tap_widget(&widget, Some(selector))
+            let widget = match find_first(tree, &sel) {
+                Some(w) => w,
+                None => {
+                    let _ = reply.send(Err(TapError::SelectorNotFound {
+                        selector: selector.clone(),
+                    }));
+                    return;
+                }
+            };
+            validate_tap(&widget, Some(selector))
         }
         TapTarget::Xy { xy } => {
             use crate::gtk::prelude::*;
-            let window = app
+            let window = match app
                 .active_window()
-                .ok_or(TapError::NoActiveWindow)?
-                .downcast::<crate::gtk::ApplicationWindow>()
-                .map_err(|_| TapError::NoActiveWindow)?;
-            let widget = resolve_xy(&window, xy.x, xy.y)?;
-            tap_widget(&widget, None)
+                .and_then(|w| w.downcast::<crate::gtk::ApplicationWindow>().ok())
+            {
+                Some(w) => w,
+                None => {
+                    let _ = reply.send(Err(TapError::NoActiveWindow));
+                    return;
+                }
+            };
+            match resolve_xy(&window, xy.x, xy.y) {
+                Ok(widget) => validate_tap(&widget, None),
+                Err(e) => {
+                    let _ = reply.send(Err(e));
+                    return;
+                }
+            }
+        }
+    };
+
+    match plan {
+        Ok(plan) => plan.run_deferred(reply),
+        Err(e) => {
+            let _ = reply.send(Err(e));
         }
     }
 }
@@ -351,6 +391,21 @@ pub(crate) fn dispatch_press(
     anim.run(move || {
         let _ = reply.send(Ok(()));
     });
+}
+
+/// GTK-bound entry point for `MainCmd::Key` (issue #10 companion). Resolves the
+/// active window and delegates to `input::send_key`, which (for `Escape`) pops
+/// down the open autohide popover — a grab-safe dismissal that does not require
+/// synthesizing a `GdkEvent`. Replies synchronously: `popdown()` does not
+/// re-enter the way a child-widget click can, so there is nothing to defer.
+pub(crate) fn dispatch_key(app: &crate::gtk::Application, key: &str) -> Result<(), KeyError> {
+    use crate::gtk::prelude::*;
+    let window = app
+        .active_window()
+        .ok_or(KeyError::NoActiveWindow)?
+        .downcast::<crate::gtk::Window>()
+        .map_err(|_| KeyError::NoActiveWindow)?;
+    send_key(&window, key)
 }
 
 pub(crate) fn eval_condition_in_app(

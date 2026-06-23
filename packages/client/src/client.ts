@@ -26,6 +26,7 @@ import type {
   ElementsResponse,
   FocusRequest,
   Info,
+  KeyRequest,
   PinchRequest,
   PressRequest,
   TapTarget,
@@ -277,6 +278,30 @@ export class E2EClient {
       path: "/test/press",
       body,
       capability: "press",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Deliver a single key to the active window (issue #10 companion).
+   *
+   * MVP supports `"Escape"`, which dismisses the active window's open autohide
+   * (modal) `GtkPopover` — the safe escape hatch for closing a confirm dialog
+   * from a test without clicking a child widget (which can re-enter the modal
+   * grab). A no-op success when no popover is open, so it is safe as cleanup.
+   *
+   * Errors:
+   *   - 422 unsupported_key  — key name other than `"Escape"`
+   *   - 422 no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async key(key: string): Promise<void> {
+    const body: KeyRequest = { key };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/key",
+      body,
+      capability: "key",
       expect: "void",
     });
   }

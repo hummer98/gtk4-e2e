@@ -44,6 +44,7 @@ pub enum Capability {
     Pinch,
     Focus,
     Press,
+    Key,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -144,6 +145,18 @@ pub struct PressRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xy: Option<XY>,
     pub hold_ms: u64,
+}
+
+/// Body of `POST /test/key` (issue #10 companion).
+///
+/// Delivers a single key to the active window so tests can dismiss modal UI
+/// (an autohide `GtkPopover` confirm dialog) without relying on a click that
+/// might re-enter the modal grab. MVP supports `key = "Escape"`; the active
+/// window's open autohide popover is popped down (the documented Escape
+/// behaviour). Unknown key names are rejected with 422 `unsupported_key`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct KeyRequest {
+    pub key: String,
 }
 
 /// Condition long-polled by `/test/wait`.

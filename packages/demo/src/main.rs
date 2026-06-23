@@ -330,6 +330,71 @@ fn build_ui(
     }
     longpress_area.add_controller(longpress_gesture);
 
+    // issue #10: autohide (modal) Popover mimicking the Brainship delete-confirm
+    // dialog. Tapping `#open-popover` pops it up; it grabs modally. Inside are
+    // `#popover-confirm` / `#popover-cancel` buttons. Both pop the popover down
+    // *synchronously inside their `clicked` handler* — the exact pattern that,
+    // on Wayland, used to re-enter the modal grab and stall the e2e tap reply.
+    // The server now defers the tap action to a GLib idle callback so the reply
+    // is always sent and the grab tears down cleanly.
+    let confirm_btn = Button::with_label("Delete");
+    confirm_btn.set_widget_name("popover-confirm");
+    let cancel_btn = Button::with_label("Cancel");
+    cancel_btn.set_widget_name("popover-cancel");
+
+    let popover_box = GtkBox::builder()
+        .orientation(Orientation::Vertical)
+        .spacing(8)
+        .build();
+    popover_box.append(&Label::new(Some("Delete this item?")));
+    popover_box.append(&confirm_btn);
+    popover_box.append(&cancel_btn);
+
+    let confirm_popover = gtk4::Popover::builder().autohide(true).build();
+    confirm_popover.set_widget_name("confirm-popover");
+    confirm_popover.set_child(Some(&popover_box));
+
+    let open_popover_btn = Button::with_label("Open confirm");
+    open_popover_btn.set_widget_name("open-popover");
+    confirm_popover.set_parent(&open_popover_btn);
+    {
+        let confirm_popover = confirm_popover.clone();
+        open_popover_btn.connect_clicked(move |_| {
+            confirm_popover.popup();
+        });
+    }
+    {
+        let confirm_popover = confirm_popover.clone();
+        #[cfg(feature = "e2e")]
+        let server_slot = server_slot.clone();
+        #[cfg(feature = "e2e")]
+        let demo_state = demo_state.clone();
+        confirm_btn.connect_clicked(move |_| {
+            // Synchronous popdown inside the handler — the grab-reentrant shape.
+            confirm_popover.popdown();
+            #[cfg(feature = "e2e")]
+            {
+                set_at(&demo_state, "/confirm/result", json!("deleted"));
+                push_state(&server_slot, &demo_state);
+            }
+        });
+    }
+    {
+        let confirm_popover = confirm_popover.clone();
+        #[cfg(feature = "e2e")]
+        let server_slot = server_slot.clone();
+        #[cfg(feature = "e2e")]
+        let demo_state = demo_state.clone();
+        cancel_btn.connect_clicked(move |_| {
+            confirm_popover.popdown();
+            #[cfg(feature = "e2e")]
+            {
+                set_at(&demo_state, "/confirm/result", json!("cancelled"));
+                push_state(&server_slot, &demo_state);
+            }
+        });
+    }
+
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(8)
@@ -353,6 +418,7 @@ fn build_ui(
     vbox.append(&longpress_area);
     vbox.append(&mode_stack);
     vbox.append(&mode_toggle);
+    vbox.append(&open_popover_btn);
 
     let window = ApplicationWindow::builder()
         .application(app)

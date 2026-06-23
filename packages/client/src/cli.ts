@@ -41,6 +41,7 @@ Subcommands:
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
   press <selector|x,y> <hold_ms>    POST /test/press (GestureLongPress)
+  key <Escape>                      POST /test/key — dismiss the open modal popover
   screenshot <out.png>                                 GET /test/screenshot → save to file
   screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
                   [--threshold <0.0-1.0>] [--update-baseline]
@@ -426,6 +427,14 @@ async function runPress(parsed: ParsedArgs): Promise<void> {
   await client.press(opts);
 }
 
+async function runKey(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 1) {
+    throw new ArgvError("key requires <key> (MVP: Escape)");
+  }
+  const client = await buildClient(parsed);
+  await client.key(parsed.positional[0]);
+}
+
 async function runElements(parsed: ParsedArgs): Promise<void> {
   const client = await buildClient(parsed);
   const resp = await client.elements({
@@ -659,6 +668,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "press":
         await runPress(parsed);
+        return 0;
+      case "key":
+        await runKey(parsed);
         return 0;
       case "screenshot":
         return await runScreenshot(parsed);

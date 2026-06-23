@@ -11,6 +11,7 @@
 //! | `/test/swipe`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/pinch`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/press`        | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/key`          | POST   | 200     | 400 / 422 / 500 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
@@ -39,12 +40,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::elements::ElementsError;
 use crate::input::{
-    FocusError, PinchError, PressError, SwipeError, TapError, TypeError, MAX_PRESS_HOLD_MS,
+    FocusError, KeyError, PinchError, PressError, SwipeError, TapError, TypeError,
+    MAX_PRESS_HOLD_MS,
 };
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{
-    EventEnvelope, FocusRequest, Info, PinchRequest, PressRequest, SwipeRequest, TapTarget,
-    TypeRequest, WaitRequest,
+    EventEnvelope, FocusRequest, Info, KeyRequest, PinchRequest, PressRequest, SwipeRequest,
+    TapTarget, TypeRequest, WaitRequest,
 };
 use crate::snapshot::ScreenshotError;
 use crate::state::AppDefinedState;
@@ -72,6 +74,7 @@ pub fn router(state: AppState) -> Router {
         .route("/test/swipe", post(post_swipe))
         .route("/test/pinch", post(post_pinch))
         .route("/test/press", post(post_press))
+        .route("/test/key", post(post_key))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
@@ -348,6 +351,40 @@ fn press_error_response(e: PressError) -> Response {
         PressError::InvalidTarget { reason } => {
             validation_error("invalid_target", json!({ "reason": reason }))
         }
+    }
+}
+
+async fn post_key(State(state): State<AppState>, body: String) -> Response {
+    let req: KeyRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Key {
+            key: req.key,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match rx.await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => key_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+
+fn key_error_response(e: KeyError) -> Response {
+    match e {
+        KeyError::UnsupportedKey { key } => {
+            validation_error("unsupported_key", json!({ "key": key }))
+        }
+        KeyError::NoActiveWindow => validation_error("no_active_window", json!({})),
     }
 }
 
