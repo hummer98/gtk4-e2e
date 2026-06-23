@@ -129,8 +129,9 @@ fn capability_enum_order_is_anchored() {
             "pinch",
             "focus",
             "press",
+            "key",
         ],
-        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements, state, pinch, focus, press]"
+        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements, state, pinch, focus, press, key]"
     );
 }
 

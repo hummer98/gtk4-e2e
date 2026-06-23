@@ -43,6 +43,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Pinch,
             Capability::Focus,
             Capability::Press,
+            Capability::Key,
         ],
         token_required: None,
     });
@@ -681,7 +682,10 @@ async fn screenshot_invalid_window_returns_422() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let v = body_json(resp).await;
-    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_window"));
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_window")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -913,8 +917,9 @@ async fn type_capability_in_info() {
             "pinch",
             "focus",
             "press",
+            "key",
         ],
-        "capabilities order must include type, swipe, elements, state, pinch, focus, and press at the tail"
+        "capabilities order must include type, swipe, elements, state, pinch, focus, press, and key at the tail"
     );
 }
 
@@ -1735,6 +1740,206 @@ async fn pinch_no_pinchable_404() {
     assert_eq!(
         v.get("error").and_then(Value::as_str),
         Some("no_pinchable_at_point")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- issue #10 companion: key capability -----
+
+#[tokio::test]
+async fn key_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn key_unsupported_key_422() {
+    // No GTK: a mock receiver replies with the validation error directly,
+    // mirroring what `dispatch_key` → `send_key` emits on the GLib thread.
+    let (mut state, _tx) = make_state();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    state.cmd_tx = cmd_tx;
+    tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            if let MainCmd::Key { key, reply } = cmd {
+                let _ = reply.send(Err(gtk4_e2e_server::input::KeyError::UnsupportedKey {
+                    key,
+                }));
+            }
+        }
+    });
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"key\":\"Enter\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("unsupported_key")
+    );
+    assert_eq!(v.get("key").and_then(Value::as_str), Some("Enter"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn key_escape_dismisses_modal_popover_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-key-escape")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let popover = gtk::Popover::builder().autohide(true).build();
+    popover.set_widget_name("confirm-popover");
+    let trigger = gtk::Button::with_label("open");
+    trigger.set_widget_name("open-popover");
+    popover.set_parent(&trigger);
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&trigger);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&vbox)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    popover.popup();
+    common::pump_glib(64);
+    assert!(popover.is_mapped(), "precondition: popover open");
+
+    install_app(app_gtk);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"key\":\"Escape\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        !popover.is_mapped(),
+        "Escape via /test/key should dismiss the modal popover"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+/// Regression for issue #10: tapping a button inside an open modal popover
+/// returns 200 (deferred dispatch) and the popover is dismissed by its
+/// click handler.
+#[tokio::test(flavor = "current_thread")]
+async fn tap_inside_modal_popover_returns_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-modal-tap")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.set_widget_name("popover-cancel");
+    let pop_box = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    pop_box.append(&cancel);
+    let popover = gtk::Popover::builder().autohide(true).build();
+    popover.set_widget_name("confirm-popover");
+    popover.set_child(Some(&pop_box));
+    let trigger = gtk::Button::with_label("open");
+    trigger.set_widget_name("open-popover");
+    popover.set_parent(&trigger);
+    {
+        let popover = popover.clone();
+        cancel.connect_clicked(move |_| popover.popdown());
+    }
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&trigger);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&vbox)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    popover.popup();
+    common::pump_glib(64);
+    assert!(popover.is_mapped(), "precondition: popover open");
+
+    install_app(app_gtk);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    // The tap action is deferred to a GLib idle callback, so the dispatch only
+    // replies once the loop is pumped. Drive the loop concurrently with the
+    // request (mirror of `swipe_endpoint_returns_200`) so the reply arrives.
+    let req = Request::builder()
+        .method("POST")
+        .uri("/test/tap")
+        .header("content-type", "application/json")
+        .body(Body::from("{\"selector\":\"#popover-cancel\"}"))
+        .unwrap();
+    let resp = tokio::select! {
+        r = app.oneshot(req) => r.unwrap(),
+        _ = async {
+            for _ in 0..400 {
+                for _ in 0..16 {
+                    if !gtk::glib::MainContext::default().iteration(false) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        } => panic!("pump finished before request returned"),
+    };
+    common::pump_glib(128);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        !popover.is_mapped(),
+        "modal popover should be dismissed after the deferred tap fired its click handler"
     );
 
     window.close();
