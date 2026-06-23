@@ -29,12 +29,19 @@ use gtk::prelude::*;
 pub enum ScreenshotError {
     NoActiveWindow,
     /// `?selector=` failed to parse (issue #7).
-    InvalidSelector { reason: String },
+    InvalidSelector {
+        reason: String,
+    },
     /// `?selector=` parsed but matched no widget across `app.windows()`
     /// (issue #7). Carries the original selector text for the 404 body.
-    SelectorNotFound { selector: String },
+    SelectorNotFound {
+        selector: String,
+    },
     /// `?window=<idx>` is out of range for `app.windows()` (issue #7).
-    WindowOutOfRange { index: usize, count: usize },
+    WindowOutOfRange {
+        index: usize,
+        count: usize,
+    },
     /// The resolved target exists in the widget tree but is not visible /
     /// mapped, so it has nothing to paint — e.g. a child of a collapsed
     /// `GtkRevealer` (`reveal-child=false`). Distinct from `NoActiveWindow`
@@ -93,11 +100,10 @@ pub fn render_target(
         let sel = parse_selector(sel_str).map_err(|e| ScreenshotError::InvalidSelector {
             reason: e.reason.to_string(),
         })?;
-        let widget = find_first(GtkTree { app }, &sel).ok_or_else(|| {
-            ScreenshotError::SelectorNotFound {
+        let widget =
+            find_first(GtkTree { app }, &sel).ok_or_else(|| ScreenshotError::SelectorNotFound {
                 selector: sel_str.to_string(),
-            }
-        })?;
+            })?;
         return capture_widget_png(&widget);
     }
 
