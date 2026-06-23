@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
-use crate::input::{FocusError, PinchError, PressError, SwipeError, TapError, TypeError};
+use crate::input::{FocusError, KeyError, PinchError, PressError, SwipeError, TapError, TypeError};
 use crate::proto::{ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
@@ -117,6 +117,13 @@ pub enum MainCmd {
         hold_ms: u64,
         reply: oneshot::Sender<Result<(), PressError>>,
     },
+    /// Deliver a single key to the active window (issue #10 companion). MVP
+    /// supports `"Escape"`, which pops down an open autohide popover so tests
+    /// can dismiss a modal without a grab-reentrant child click.
+    Key {
+        key: String,
+        reply: oneshot::Sender<Result<(), KeyError>>,
+    },
 }
 
 thread_local! {
@@ -163,9 +170,18 @@ fn handle_cmd(cmd: MainCmd) {
             let _ = reply.send(());
         }
         MainCmd::Tap { target, reply } => {
-            let outcome = with_app(|app| crate::wait::dispatch_tap(app, &target))
-                .unwrap_or(Err(TapError::NoActiveWindow));
-            let _ = reply.send(outcome);
+            // Issue #10: `dispatch_tap` now owns `reply` so it can defer the tap
+            // action to a GLib idle callback (avoiding modal-popover grab
+            // reentrancy) and reply from there. Same `APP.with`-direct-borrow
+            // shape as Swipe / Pinch / Press so the closure can consume `reply`.
+            APP.with(|slot| match slot.borrow().as_ref() {
+                Some(app) => {
+                    crate::wait::dispatch_tap(app, &target, reply);
+                }
+                None => {
+                    let _ = reply.send(Err(TapError::NoActiveWindow));
+                }
+            });
         }
         MainCmd::EvalWait { condition, reply } => {
             let outcome = with_app(|app| crate::wait::eval_condition_in_app(app, &condition))
@@ -179,10 +195,9 @@ fn handle_cmd(cmd: MainCmd) {
             window,
             reply,
         } => {
-            let outcome = with_app(|app| {
-                crate::snapshot::render_target(app, selector.as_deref(), window)
-            })
-            .unwrap_or(Err(ScreenshotError::NoActiveWindow));
+            let outcome =
+                with_app(|app| crate::snapshot::render_target(app, selector.as_deref(), window))
+                    .unwrap_or(Err(ScreenshotError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
         MainCmd::Type { request, reply } => {
@@ -260,6 +275,11 @@ fn handle_cmd(cmd: MainCmd) {
                     let _ = reply.send(Err(PressError::NoActiveWindow));
                 }
             });
+        }
+        MainCmd::Key { key, reply } => {
+            let outcome = with_app(|app| crate::wait::dispatch_key(app, &key))
+                .unwrap_or(Err(KeyError::NoActiveWindow));
+            let _ = reply.send(outcome);
         }
     }
 }
