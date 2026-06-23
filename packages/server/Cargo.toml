@@ -47,3 +47,10 @@ http-body-util = "0.1"
 [[example]]
 name = "gen-schemas"
 required-features = ["e2e"]
+
+# Main-thread diagnostic for issue #10 (macOS-friendly). Integration tests
+# auto-skip on macOS because libtest spawns worker threads and GTK refuses
+# off-main-thread init; an example's `main()` runs on the real main thread.
+[[example]]
+name = "modal-popover-probe"
+required-features = ["e2e"]
