@@ -16,7 +16,8 @@
         "state",
         "pinch",
         "focus",
-        "press"
+        "press",
+        "key"
       ],
       "type": "string"
     }
