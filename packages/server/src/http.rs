@@ -11,6 +11,8 @@
 //! | `/test/swipe`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/pinch`        | POST   | 200     | 400 / 422 / 404 / 500 |
 //! | `/test/press`        | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/set-value`    | POST   | 200     | 400 / 422 / 404 / 500 |
+//! | `/test/key`          | POST   | 200     | 400 / 422 / 500 / 503 |
 //! | `/test/wait`         | POST   | 200     | 400 / 422 / 408 / 500 |
 //! | `/test/screenshot`   | GET    | 200     | 422 / 500 |
 //! | `/test/type`         | POST   | 200     | 400 / 422 / 404 / 500 |
@@ -37,14 +39,17 @@ use axum::{
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
+use std::time::Duration;
+
 use crate::elements::ElementsError;
 use crate::input::{
-    FocusError, PinchError, PressError, SwipeError, TapError, TypeError, MAX_PRESS_HOLD_MS,
+    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError, TypeError,
+    MAX_PRESS_HOLD_MS,
 };
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{
-    EventEnvelope, FocusRequest, Info, PinchRequest, PressRequest, SwipeRequest, TapTarget,
-    TypeRequest, WaitRequest,
+    EventEnvelope, FocusRequest, Info, KeyRequest, KeyResult, PinchRequest, PressRequest,
+    SetValueRequest, SwipeRequest, TapTarget, TypeRequest, WaitRequest,
 };
 use crate::snapshot::ScreenshotError;
 use crate::state::AppDefinedState;
@@ -72,6 +77,8 @@ pub fn router(state: AppState) -> Router {
         .route("/test/swipe", post(post_swipe))
         .route("/test/pinch", post(post_pinch))
         .route("/test/press", post(post_press))
+        .route("/test/set-value", post(post_set_value))
+        .route("/test/key", post(post_key))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
@@ -132,9 +139,9 @@ async fn post_tap(State(state): State<AppState>, body: String) -> Response {
     {
         return server_error("main_thread channel closed");
     }
-    let outcome = match rx.await {
+    let outcome = match recv_bounded(rx).await {
         Ok(o) => o,
-        Err(_) => return server_error("main_thread reply dropped"),
+        Err(resp) => return resp,
     };
     match outcome {
         Ok(()) => StatusCode::OK.into_response(),
@@ -351,6 +358,134 @@ fn press_error_response(e: PressError) -> Response {
     }
 }
 
+async fn post_set_value(State(state): State<AppState>, body: String) -> Response {
+    let req: SetValueRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    // R1: pre-validate on the pure (non-GLib) path before crossing the channel.
+    // 1. Exactly one of selector / xy must be set.
+    match (&req.selector, &req.xy) {
+        (Some(_), None) | (None, Some(_)) => {}
+        _ => {
+            return validation_error(
+                "invalid_target",
+                json!({ "reason": "exactly one of selector / xy required" }),
+            );
+        }
+    }
+    // 2. Selector mode requires an explicit value (no coordinate to derive one).
+    if req.selector.is_some() && req.value.is_none() {
+        return validation_error(
+            "invalid_target",
+            json!({ "reason": "value is required when targeting by selector" }),
+        );
+    }
+    // 3. value must be finite when present.
+    if let Some(v) = req.value {
+        if !v.is_finite() {
+            return validation_error("invalid_value", json!({ "reason": "not_finite" }));
+        }
+    }
+    // 4. selector syntax (mirror of post_press): a parser error is 422
+    //    invalid_selector here rather than 404 from the dispatch fallback.
+    if let Some(selector) = &req.selector {
+        if let Err(e) = parse_selector(selector) {
+            return validation_error("invalid_selector", json!({ "reason": e.reason }));
+        }
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::SetValue {
+            selector: req.selector,
+            xy: req.xy,
+            value: req.value,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match recv_bounded(rx).await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => set_value_error_response(e),
+        Err(resp) => resp,
+    }
+}
+
+fn set_value_error_response(e: SetValueError) -> Response {
+    match e {
+        SetValueError::InvalidTarget { reason } => {
+            validation_error("invalid_target", json!({ "reason": reason }))
+        }
+        SetValueError::InvalidValue { reason } => {
+            validation_error("invalid_value", json!({ "reason": reason }))
+        }
+        SetValueError::OutOfBounds { x, y } => {
+            validation_error("out_of_bounds", json!({ "x": x, "y": y }))
+        }
+        SetValueError::WidgetNotVisible { selector } => match selector {
+            Some(s) => validation_error("widget_not_visible", json!({ "selector": s })),
+            None => validation_error("widget_not_visible", json!({})),
+        },
+        SetValueError::WidgetDisabled { selector } => match selector {
+            Some(s) => validation_error("widget_disabled", json!({ "selector": s })),
+            None => validation_error("widget_disabled", json!({})),
+        },
+        SetValueError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        SetValueError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        SetValueError::NoRangeAtPoint { x, y } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_range_at_point", "x": x, "y": y }),
+        ),
+        SetValueError::NoRangeForSelector { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_range_for_selector", "selector": selector }),
+        ),
+    }
+}
+
+async fn post_key(State(state): State<AppState>, body: String) -> Response {
+    let req: KeyRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::Key {
+            key: req.key,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match recv_bounded(rx).await {
+        Ok(Ok(closed_popover)) => Json(KeyResult { closed_popover }).into_response(),
+        Ok(Err(e)) => key_error_response(e),
+        Err(resp) => resp,
+    }
+}
+
+fn key_error_response(e: KeyError) -> Response {
+    match e {
+        KeyError::UnsupportedKey { key } => {
+            validation_error("unsupported_key", json!({ "key": key }))
+        }
+        KeyError::NoActiveWindow => validation_error("no_active_window", json!({})),
+    }
+}
+
 async fn post_wait(State(state): State<AppState>, body: String) -> Response {
     let req: WaitRequest = match serde_json::from_str(&body) {
         Ok(r) => r,
@@ -447,9 +582,9 @@ async fn get_screenshot(
     {
         return server_error("main_thread channel closed");
     }
-    let outcome = match rx.await {
+    let outcome = match recv_bounded(rx).await {
         Ok(o) => o,
-        Err(_) => return server_error("main_thread reply dropped"),
+        Err(resp) => return resp,
     };
     match outcome {
         Ok(bytes) => (
@@ -488,9 +623,9 @@ async fn post_type(State(state): State<AppState>, body: String) -> Response {
     {
         return server_error("main_thread channel closed");
     }
-    let outcome = match rx.await {
+    let outcome = match recv_bounded(rx).await {
         Ok(o) => o,
-        Err(_) => return server_error("main_thread reply dropped"),
+        Err(resp) => return resp,
     };
     match outcome {
         Ok(()) => StatusCode::OK.into_response(),
@@ -543,9 +678,9 @@ async fn post_focus(State(state): State<AppState>, body: String) -> Response {
     {
         return server_error("main_thread channel closed");
     }
-    let outcome = match rx.await {
+    let outcome = match recv_bounded(rx).await {
         Ok(o) => o,
-        Err(_) => return server_error("main_thread reply dropped"),
+        Err(resp) => return resp,
     };
     match outcome {
         Ok(()) => StatusCode::OK.into_response(),
@@ -601,10 +736,10 @@ async fn get_elements(
     {
         return server_error("main_thread channel closed");
     }
-    match rx.await {
+    match recv_bounded(rx).await {
         Ok(Ok(resp)) => Json(resp).into_response(),
         Ok(Err(e)) => elements_error_response(e),
-        Err(_) => server_error("main_thread reply dropped"),
+        Err(resp) => resp,
     }
 }
 
@@ -774,6 +909,53 @@ fn parse_screenshot_query(raw: &str) -> Result<ScreenshotQuery, Response> {
         }
     }
     Ok(ScreenshotQuery { selector, window })
+}
+
+/// Upper bound on how long a bounded (instantaneous) `MainCmd` may take to
+/// reply before the HTTP layer gives up and returns 503 (issue #10).
+///
+/// The receiver loop on the GLib main thread processes commands sequentially
+/// and synchronously: if one command blocks (e.g. a `tap` whose `emit_clicked`
+/// handler stalls under a modal popover's grab), every subsequent command
+/// queues behind it. Without this guard the HTTP request hangs indefinitely
+/// (the original issue #10 symptom — curl times out, the test client cannot
+/// distinguish "slow" from "wedged"). The timeout converts that into a
+/// handleable 503 so callers fail fast.
+///
+/// Generous (5 s) so it never fires for a healthy instantaneous op; the
+/// duration-bearing gesture commands (`swipe` / `pinch` / `press`) and the
+/// long-poll `wait` deliberately keep their own timing and do **not** use this.
+const DISPATCH_TIMEOUT_MS: u64 = 5_000;
+
+/// Await a `MainCmd` reply with the bounded-dispatch timeout applied.
+///
+/// `Ok(v)` is the reply; `Err(resp)` is a ready-to-return error response —
+/// either 500 (the reply sender was dropped, e.g. a panic in the handler) or
+/// 503 (`main_thread_unresponsive`: the deadline elapsed). Used by the
+/// instantaneous handlers (`tap` / `type` / `focus` / `set-value` / `key` /
+/// `screenshot` / `elements`).
+async fn recv_bounded<T>(rx: oneshot::Receiver<T>) -> Result<T, Response> {
+    match tokio::time::timeout(Duration::from_millis(DISPATCH_TIMEOUT_MS), rx).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(_)) => Err(server_error("main_thread reply dropped")),
+        Err(_) => Err(main_thread_unresponsive()),
+    }
+}
+
+/// 503 returned when the GLib main thread did not reply within
+/// `DISPATCH_TIMEOUT_MS` — almost always because a prior command is wedged
+/// under a modal grab (issue #10). Recovery may require restarting the app.
+fn main_thread_unresponsive() -> Response {
+    error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({
+            "error": "main_thread_unresponsive",
+            "timeout_ms": DISPATCH_TIMEOUT_MS,
+            "hint": "the GLib main thread did not reply in time — it is likely \
+                     blocked under a modal popover's grab or a long-running app \
+                     handler (issue #10); recovery may require restarting the app",
+        }),
+    )
 }
 
 fn bad_request(reason: &str) -> Response {

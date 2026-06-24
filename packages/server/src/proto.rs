@@ -29,6 +29,8 @@ pub struct Info {
 /// T019 appends `State` for `GET /test/state` (app-defined state snapshot).
 /// Step 9 (c) appends `Pinch` (T015) for `POST /test/pinch`.
 /// Task 029 appends `Press` (T029) for `POST /test/press` (GestureLongPress).
+/// `SetValue` appends support for `POST /test/set-value` (GtkRange / GtkScale).
+/// `Key` (issue #10) appends support for `POST /test/key` (Escape → popdown).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -44,6 +46,8 @@ pub enum Capability {
     Pinch,
     Focus,
     Press,
+    SetValue,
+    Key,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -144,6 +148,74 @@ pub struct PressRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub xy: Option<XY>,
     pub hold_ms: u64,
+}
+
+/// Body of `POST /test/set-value`.
+///
+/// Drives a `GtkRange` (GtkScale / GtkScrollbar) to a target value via
+/// `gtk::Range::set_value`, which clamps to the adjustment range and fires
+/// `value-changed` / `notify::value` for app-side observers — the same
+/// "achieve the semantic effect through the most reliable API" shortcut used by
+/// `tap` (`emit_clicked`) and `swipe` (animated adjustment), since GTK4's safe
+/// APIs cannot synthesise the click+drag a user would perform on the trough.
+///
+/// Exactly one of `selector` / `xy` selects the target widget (HTTP 422
+/// otherwise):
+///   - `selector`: resolve the `GtkRange` by `#name` / `.class`. `value` is
+///     **required** in this mode (there is no coordinate to derive it from).
+///   - `xy`: window-local pixel coordinates; the widget under the point (or its
+///     nearest `GtkRange` ancestor) is the target.
+///
+/// `value` resolution:
+///   - present: used directly (clamped server-side to the adjustment range).
+///     Most deterministic; preferred for assertions.
+///   - absent: requires `xy` — the value is derived from the point's position
+///     along the trough (orientation- and `inverted`-aware, best-effort: trough
+///     padding / slider size are ignored, so endpoints may be a few px off).
+///
+/// `value` is rejected when non-finite (NaN / ±Inf) with HTTP 422
+/// `invalid_value`.
+///
+/// `Eq` is intentionally omitted: `Option<f64>` is not `Eq` (parity with
+/// `PinchRequest`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct SetValueRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<XY>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+}
+
+/// Body of `POST /test/key` (issue #10).
+///
+/// `key` is a GDK key name (e.g. `"Escape"`). The MVP supports `"Escape"` only,
+/// which dismisses the topmost open `GtkPopover` via `popdown()` — the reliable
+/// "achieve the semantic effect through the safe API" shortcut also used by
+/// `tap` (`emit_clicked`) and `set-value` (`set_value`), since GTK4's safe APIs
+/// cannot synthesise a raw key event. Any other key name returns HTTP 422
+/// `unsupported_key`. The endpoint exists so tests can close a modal / autohide
+/// popover that would otherwise leave `tap` blocked under its modal grab.
+///
+/// `key` is matched case-insensitively for the common aliases (`"Escape"` /
+/// `"Esc"`); the wire form is forward-compatible — future keys can be added
+/// without renegotiating the schema.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
+pub struct KeyRequest {
+    pub key: String,
+}
+
+/// Success body of `POST /test/key`.
+///
+/// `closed_popover` reports whether an open popover was actually dismissed by
+/// the (Escape) key. `false` is **not** an error — it simply means there was no
+/// open popover to close, mirroring how a real Escape press is a no-op when
+/// nothing has a modal grab. Tests can assert on this to confirm the dialog was
+/// open before they pressed Escape.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyResult {
+    pub closed_popover: bool,
 }
 
 /// Condition long-polled by `/test/wait`.

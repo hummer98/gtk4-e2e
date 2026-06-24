@@ -43,6 +43,10 @@ e2e = [
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# `test-util` enables `#[tokio::test(start_paused = true)]` so the issue #10
+# bounded-dispatch timeout (503) can be exercised in virtual time, not 5 s of
+# real wall-clock.
+tokio = { version = "1", features = ["test-util"] }
 
 [[example]]
 name = "gen-schemas"

@@ -33,12 +33,13 @@ Each capability is advertised in `GET /test/info` and exposed both as an HTTP/We
 | Capability | Endpoint | CLI | Purpose |
 |---|---|---|---|
 | `info`       | `GET /test/info`        | `info`                       | Instance metadata + advertised capabilities |
-| `tap`        | `POST /test/tap`        | `tap <selector\|x,y>`        | Click/activate a widget (Button / Switch / CheckButton / ToggleButton) |
+| `tap`        | `POST /test/tap`        | `tap <selector\|x,y>`        | Click/activate a widget (Button / Switch / CheckButton / ToggleButton); xy taps retarget to the nearest activatable ancestor, so a tap on a button's label / a StackSwitcher tab works |
 | `type`       | `POST /test/type`       | `type <selector> <text>`     | Replace text content of an Editable / TextView |
 | `focus`      | `POST /test/focus`      | `focus <selector>`           | `grab_focus()` a widget so `:focus` / `:focus-within` CSS renders for screenshot checks |
 | `swipe`      | `POST /test/swipe`      | `swipe <x1,y1> <x2,y2>`      | Animate a scroll gesture over the nearest `ScrolledWindow` |
 | `pinch`      | `POST /test/pinch`      | `pinch <x,y> <scale>`        | Drive a `GestureZoom` (zoom in/out) |
 | `press`      | `POST /test/press`      | `press <selector\|x,y> <hold_ms>` | Fire a `GestureLongPress` (press→hold→release) |
+| `key`        | `POST /test/key`        | `key <name>`                 | Press a key (MVP: `Escape` → `popdown()` the topmost open popover; safe way to dismiss a modal/autohide dialog without wedging `tap`) |
 | `screenshot` | `GET /test/screenshot`  | `screenshot <out\|--baseline> [--selector\|--window]` | Capture the active window — or a `--selector` widget / `--window` toplevel (non-active窓・popover も撮れる) — as PNG / visual-regression diff |
 | `elements`   | `GET /test/elements`    | `elements [--selector …]`    | Walk the widget tree (+ opt-in GObject property read) |
 | `wait`       | `POST /test/wait`       | `wait visible\|state-eq\|app-state-eq` | Long-poll until a condition holds |

@@ -15,8 +15,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
 use crate::input::{
-    focus_widget, resolve_xy, tap_widget, type_text, validate_press, validate_press_widget,
-    FocusError, PinchError, PressError, SwipeError, TapError, TypeError,
+    focus_widget, resolve_xy, set_value_at, set_value_widget, tap_widget, type_text,
+    validate_press, validate_press_widget, FocusError, PinchError, PressError, SetValueError,
+    SwipeError, TapError, TypeError,
 };
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
 use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
@@ -155,7 +156,16 @@ pub(crate) fn dispatch_tap(
                 .downcast::<crate::gtk::ApplicationWindow>()
                 .map_err(|_| TapError::NoActiveWindow)?;
             let widget = resolve_xy(&window, xy.x, xy.y)?;
-            tap_widget(&widget, None)
+            // issue #12: the hit-test lands on the deepest leaf, which for a
+            // composite / labelled control is a non-activatable content node
+            // (a Button's GtkLabel, a StackSwitcher tab's inner GtkBox).
+            // Retarget to the nearest activatable ancestor — mirroring how a
+            // real pointer event bubbles — so xy taps on "looks like a button"
+            // widgets fire. Fall back to the leaf when nothing up the chain is
+            // activatable, so `tap_widget` still reports `UnsupportedWidget`
+            // naming the widget actually under the point.
+            let target = crate::input::nearest_activatable(&widget).unwrap_or(widget);
+            tap_widget(&target, None)
         }
     }
 }
@@ -207,6 +217,26 @@ pub(crate) fn dispatch_focus(
         selector: req.selector.clone(),
     })?;
     focus_widget(&widget, Some(&req.selector))
+}
+
+/// GTK-bound entry point for `MainCmd::Key` (issue #10).
+///
+/// MVP supports `"Escape"` / `"Esc"` (case-insensitive) only, dismissing the
+/// topmost open popover via `crate::input::dismiss_topmost_popover`. Returns
+/// `Ok(closed_popover)` — `false` is a successful no-op (nothing was open), not
+/// an error. Any other key name is `UnsupportedKey` (422), mirroring how `tap`
+/// surfaces `UnsupportedWidget` for kinds outside its MVP set.
+pub(crate) fn dispatch_key(
+    app: &crate::gtk::Application,
+    key: &str,
+) -> Result<bool, crate::input::KeyError> {
+    if key.eq_ignore_ascii_case("escape") || key.eq_ignore_ascii_case("esc") {
+        Ok(crate::input::dismiss_topmost_popover(app))
+    } else {
+        Err(crate::input::KeyError::UnsupportedKey {
+            key: key.to_string(),
+        })
+    }
 }
 
 /// GTK-bound entry point for `MainCmd::Swipe`. Plan T014 §5.4: validates
@@ -351,6 +381,49 @@ pub(crate) fn dispatch_press(
     anim.run(move || {
         let _ = reply.send(Ok(()));
     });
+}
+
+/// GTK-bound entry point for `MainCmd::SetValue`. Mirror of `dispatch_tap`:
+/// resolves the target (selector or xy), applies the value synchronously, and
+/// returns the outcome (the caller in `main_thread` forwards it on `reply`).
+///
+/// Exactly one of `selector` / `xy` is set — the HTTP layer (`post_set_value`)
+/// enforces this and pre-validates the selector / value. The mismatch arms
+/// below are defensive (`InvalidTarget`), mirroring the other dispatch helpers.
+pub(crate) fn dispatch_set_value(
+    app: &crate::gtk::Application,
+    selector: Option<String>,
+    xy: Option<XY>,
+    value: Option<f64>,
+) -> Result<(), SetValueError> {
+    match (selector, xy) {
+        (Some(selector), None) => {
+            // Selector mode requires an explicit value (no coordinate to
+            // derive one from). HTTP pre-validates this; re-check defensively.
+            let v = value.ok_or(SetValueError::InvalidTarget {
+                reason: "value is required when targeting by selector",
+            })?;
+            let sel = parse_selector(&selector).map_err(|e| SetValueError::SelectorNotFound {
+                selector: format!("{}: {}", selector, e.reason),
+            })?;
+            let tree = GtkTree { app };
+            let widget = find_first(tree, &sel).ok_or_else(|| SetValueError::SelectorNotFound {
+                selector: selector.clone(),
+            })?;
+            set_value_widget(&widget, &selector, v).map(|_| ())
+        }
+        (None, Some(xy)) => {
+            let window = app
+                .active_window()
+                .ok_or(SetValueError::NoActiveWindow)?
+                .downcast::<crate::gtk::ApplicationWindow>()
+                .map_err(|_| SetValueError::NoActiveWindow)?;
+            set_value_at(&window, xy, value).map(|_| ())
+        }
+        _ => Err(SetValueError::InvalidTarget {
+            reason: "exactly one of selector / xy required",
+        }),
+    }
 }
 
 pub(crate) fn eval_condition_in_app(

@@ -1,0 +1,52 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "XY": {
+      "description": "Window-local pixel coordinates (top-left origin).",
+      "properties": {
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Body of `POST /test/set-value`.\n\nDrives a `GtkRange` (GtkScale / GtkScrollbar) to a target value via `gtk::Range::set_value`, which clamps to the adjustment range and fires `value-changed` / `notify::value` for app-side observers — the same \"achieve the semantic effect through the most reliable API\" shortcut used by `tap` (`emit_clicked`) and `swipe` (animated adjustment), since GTK4's safe APIs cannot synthesise the click+drag a user would perform on the trough.\n\nExactly one of `selector` / `xy` selects the target widget (HTTP 422 otherwise): - `selector`: resolve the `GtkRange` by `#name` / `.class`. `value` is **required** in this mode (there is no coordinate to derive it from). - `xy`: window-local pixel coordinates; the widget under the point (or its nearest `GtkRange` ancestor) is the target.\n\n`value` resolution: - present: used directly (clamped server-side to the adjustment range). Most deterministic; preferred for assertions. - absent: requires `xy` — the value is derived from the point's position along the trough (orientation- and `inverted`-aware, best-effort: trough padding / slider size are ignored, so endpoints may be a few px off).\n\n`value` is rejected when non-finite (NaN / ±Inf) with HTTP 422 `invalid_value`.\n\n`Eq` is intentionally omitted: `Option<f64>` is not `Eq` (parity with `PinchRequest`).",
+  "properties": {
+    "selector": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "value": {
+      "format": "double",
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "xy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/XY"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "title": "SetValueRequest",
+  "type": "object"
+}

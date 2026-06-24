@@ -8,8 +8,8 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry,
-    GestureLongPress, GestureZoom, Label, ListBox, Orientation, ScrolledWindow, Stack, Switch,
-    ToggleButton,
+    GestureLongPress, GestureZoom, Label, ListBox, Orientation, Popover, Scale, ScrolledWindow,
+    Stack, StackSwitcher, Switch, ToggleButton,
 };
 #[cfg(feature = "e2e")]
 use serde_json::{json, Value};
@@ -256,6 +256,16 @@ fn build_ui(
     mode_stack.add_named(&mode1_page, Some("mode1"));
     mode_stack.add_named(&mode2_page, Some("mode2"));
 
+    // issue #12: a StackSwitcher driving `mode_stack`. Its tabs are
+    // auto-generated, *unnamed* `GtkToggleButton`s whose content is a
+    // `GtkBox` + `GtkLabel` — the exact composite that defeats both selector
+    // taps (no widget_name) and naive xy taps (leaf is the GtkBox/GtkLabel).
+    // With the nearest-activatable-ancestor fallback, an xy tap on a tab centre
+    // retargets to the ToggleButton and switches the page (observable via the
+    // existing `mode-stack` `visible-child-name` property stream).
+    let mode_switcher = StackSwitcher::builder().stack(&mode_stack).build();
+    mode_switcher.set_widget_name("mode-switcher");
+
     let mode_toggle = Button::with_label("Toggle mode");
     mode_toggle.set_widget_name("mode-toggle");
     {
@@ -330,6 +340,70 @@ fn build_ui(
     }
     longpress_area.add_controller(longpress_gesture);
 
+    // set-value capability: a horizontal GtkScale (0..100) so `POST
+    // /test/set-value` has a GtkRange to drive. `connect_value_changed` mirrors
+    // the current value into `#scale-pos` (for `state_eq` assertions) and into
+    // the app-state snapshot at `/scale1/value`, so scenarios can
+    // `wait { app_state_eq, path = "/scale1/value", value = N }`.
+    let scale1 = Scale::with_range(Orientation::Horizontal, 0.0, 100.0, 1.0);
+    scale1.set_widget_name("scale1");
+    scale1.set_hexpand(true);
+    scale1.set_draw_value(false);
+
+    let scale_pos = Label::new(Some("0"));
+    scale_pos.set_widget_name("scale-pos");
+    {
+        let scale_pos = scale_pos.clone();
+        #[cfg(feature = "e2e")]
+        let server_slot = server_slot.clone();
+        #[cfg(feature = "e2e")]
+        let demo_state = demo_state.clone();
+        scale1.connect_value_changed(move |s| {
+            let v = s.value();
+            scale_pos.set_text(&format!("{}", v as i32));
+            #[cfg(feature = "e2e")]
+            {
+                set_at(&demo_state, "/scale1/value", json!(v));
+                push_state(&server_slot, &demo_state);
+            }
+        });
+    }
+
+    // key capability (issue #10): a modal / autohide Popover acting as a
+    // confirm dialog. `#open-dialog-button` pops it up; the popover
+    // (`#confirm-popover`, autohide=true) holds a modal grab, so tapping its
+    // `#dialog-cancel-button` from a test would historically wedge the input
+    // pipeline. `POST /test/key {"key":"Escape"}` dismisses it via `popdown()`.
+    // `/confirm-popover/open` mirrors the visibility so scenarios can
+    // `wait { app_state_eq, path = "/confirm-popover/open", value = false }`
+    // after the Escape.
+    let confirm_popover = Popover::builder().autohide(true).build();
+    confirm_popover.set_widget_name("confirm-popover");
+    let cancel_button = Button::with_label("Cancel");
+    cancel_button.set_widget_name("dialog-cancel-button");
+    confirm_popover.set_child(Some(&cancel_button));
+
+    let open_dialog_button = Button::with_label("Open dialog");
+    open_dialog_button.set_widget_name("open-dialog-button");
+    confirm_popover.set_parent(&open_dialog_button);
+    {
+        let confirm_popover = confirm_popover.clone();
+        open_dialog_button.connect_clicked(move |_| confirm_popover.popup());
+    }
+    {
+        let confirm_popover_c = confirm_popover.clone();
+        cancel_button.connect_clicked(move |_| confirm_popover_c.popdown());
+    }
+    #[cfg(feature = "e2e")]
+    {
+        let server_slot = server_slot.clone();
+        let demo_state = demo_state.clone();
+        confirm_popover.connect_visible_notify(move |p| {
+            set_at(&demo_state, "/confirm-popover/open", json!(p.is_visible()));
+            push_state(&server_slot, &demo_state);
+        });
+    }
+
     let vbox = GtkBox::builder()
         .orientation(Orientation::Vertical)
         .spacing(8)
@@ -351,6 +425,10 @@ fn build_ui(
     vbox.append(&drawing_area);
     vbox.append(&zoom_pos);
     vbox.append(&longpress_area);
+    vbox.append(&scale1);
+    vbox.append(&scale_pos);
+    vbox.append(&open_dialog_button);
+    vbox.append(&mode_switcher);
     vbox.append(&mode_stack);
     vbox.append(&mode_toggle);
 

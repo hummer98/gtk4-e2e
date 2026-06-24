@@ -22,7 +22,9 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
-use crate::input::{FocusError, PinchError, PressError, SwipeError, TapError, TypeError};
+use crate::input::{
+    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError, TypeError,
+};
 use crate::proto::{ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, XY};
 use crate::snapshot::ScreenshotError;
 
@@ -117,6 +119,23 @@ pub enum MainCmd {
         hold_ms: u64,
         reply: oneshot::Sender<Result<(), PressError>>,
     },
+    /// Drive a `GtkRange` (GtkScale / GtkScrollbar) to a value via
+    /// `Range::set_value`. Exactly one of `selector` / `xy` is set (HTTP layer
+    /// enforces this). Instantaneous: replies as soon as the value is applied.
+    SetValue {
+        selector: Option<String>,
+        xy: Option<XY>,
+        value: Option<f64>,
+        reply: oneshot::Sender<Result<(), SetValueError>>,
+    },
+    /// Dismiss the topmost open popover via Escape semantics (issue #10).
+    /// Replies with `Ok(closed_popover)` — `false` means nothing was open.
+    /// Instantaneous (`popdown()` does not block), so unlike the gesture
+    /// commands it cannot itself freeze the receiver loop.
+    Key {
+        key: String,
+        reply: oneshot::Sender<Result<bool, KeyError>>,
+    },
 }
 
 thread_local! {
@@ -179,10 +198,9 @@ fn handle_cmd(cmd: MainCmd) {
             window,
             reply,
         } => {
-            let outcome = with_app(|app| {
-                crate::snapshot::render_target(app, selector.as_deref(), window)
-            })
-            .unwrap_or(Err(ScreenshotError::NoActiveWindow));
+            let outcome =
+                with_app(|app| crate::snapshot::render_target(app, selector.as_deref(), window))
+                    .unwrap_or(Err(ScreenshotError::NoActiveWindow));
             let _ = reply.send(outcome);
         }
         MainCmd::Type { request, reply } => {
@@ -260,6 +278,24 @@ fn handle_cmd(cmd: MainCmd) {
                     let _ = reply.send(Err(PressError::NoActiveWindow));
                 }
             });
+        }
+        MainCmd::SetValue {
+            selector,
+            xy,
+            value,
+            reply,
+        } => {
+            // Instantaneous (no animation): mirror the `Tap`/`Focus` pattern of
+            // returning a `Result` from the dispatch helper rather than
+            // consuming `reply` inside it.
+            let outcome = with_app(|app| crate::wait::dispatch_set_value(app, selector, xy, value))
+                .unwrap_or(Err(SetValueError::NoActiveWindow));
+            let _ = reply.send(outcome);
+        }
+        MainCmd::Key { key, reply } => {
+            let outcome = with_app(|app| crate::wait::dispatch_key(app, &key))
+                .unwrap_or(Err(KeyError::NoActiveWindow));
+            let _ = reply.send(outcome);
         }
     }
 }

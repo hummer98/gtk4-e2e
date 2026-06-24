@@ -41,6 +41,7 @@ Subcommands:
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
   press <selector|x,y> <hold_ms>    POST /test/press (GestureLongPress)
+  key <name>                        POST /test/key (MVP: Escape → popdown topmost popover)
   screenshot <out.png>                                 GET /test/screenshot → save to file
   screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
                   [--threshold <0.0-1.0>] [--update-baseline]
@@ -367,6 +368,16 @@ async function runFocus(parsed: ParsedArgs): Promise<void> {
   await client.focus(selector);
 }
 
+async function runKey(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 1) {
+    throw new ArgvError("key requires <name> (MVP: Escape)");
+  }
+  const [name] = parsed.positional;
+  const client = await buildClient(parsed);
+  const result = await client.key(name);
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+}
+
 function parseSwipeXY(arg: string): { x: number; y: number } {
   if (!/^\d+,\d+$/.test(arg)) {
     throw new ArgvError(`swipe: expected non-negative "x,y", got: ${arg}`);
@@ -659,6 +670,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "press":
         await runPress(parsed);
+        return 0;
+      case "key":
+        await runKey(parsed);
         return 0;
       case "screenshot":
         return await runScreenshot(parsed);

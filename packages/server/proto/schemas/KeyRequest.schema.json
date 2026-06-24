@@ -1,0 +1,15 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Body of `POST /test/key` (issue #10).\n\n`key` is a GDK key name (e.g. `\"Escape\"`). The MVP supports `\"Escape\"` only, which dismisses the topmost open `GtkPopover` via `popdown()` — the reliable \"achieve the semantic effect through the safe API\" shortcut also used by `tap` (`emit_clicked`) and `set-value` (`set_value`), since GTK4's safe APIs cannot synthesise a raw key event. Any other key name returns HTTP 422 `unsupported_key`. The endpoint exists so tests can close a modal / autohide popover that would otherwise leave `tap` blocked under its modal grab.\n\n`key` is matched case-insensitively for the common aliases (`\"Escape\"` / `\"Esc\"`); the wire form is forward-compatible — future keys can be added without renegotiating the schema.",
+  "properties": {
+    "key": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "key"
+  ],
+  "title": "KeyRequest",
+  "type": "object"
+}

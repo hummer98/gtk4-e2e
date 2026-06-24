@@ -76,6 +76,7 @@ interface RouteHandlers {
   screenshot?: (url: URL) => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   press?: (body: unknown) => Response | Promise<Response>;
+  key?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
   wait?: (body: unknown) => Response | Promise<Response>;
 }
@@ -108,6 +109,7 @@ function startMock(handlers: RouteHandlers): MockServer {
         return handlers.screenshot(url);
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/press" && handlers.press) return handlers.press(body);
+      if (url.pathname === "/test/key" && handlers.key) return handlers.key(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
       if (url.pathname === "/test/wait" && handlers.wait) return handlers.wait(body);
       return new Response("not found", { status: 404 });
@@ -411,6 +413,55 @@ describe("cli press", () => {
     const result = await runCli(["--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("press");
+  });
+});
+
+describe("cli key", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {key} as POST /test/key body and prints the KeyResult", async () => {
+    mock = startMock({
+      key: () =>
+        new Response(JSON.stringify({ closed_popover: true }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const result = await runCli(["key", "Escape", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.path).toBe("/test/key");
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({ key: "Escape" });
+    expect(JSON.parse(result.stdout)).toEqual({ closed_popover: true });
+  });
+
+  test("missing key name exits 2", async () => {
+    const result = await runCli(["key"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+
+  test("exits 5 on HttpError (422 unsupported_key)", async () => {
+    mock = startMock({
+      key: () =>
+        new Response(JSON.stringify({ error: "unsupported_key", key: "Enter" }), {
+          status: 422,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    const result = await runCli(["key", "Enter", "--port", String(mock.port)]);
+    expect(result.exitCode).toBe(5);
+  });
+
+  test("USAGE mentions the key subcommand", async () => {
+    const result = await runCli(["--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("key");
   });
 });
 

@@ -112,6 +112,42 @@ pub fn tap_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), Ta
     })
 }
 
+/// True if `tap_widget` can activate `widget` directly — i.e. it is one of the
+/// kinds in the dispatch ladder above (`Switch` / `CheckButton` /
+/// `ToggleButton` / `Button`). Keep this set in sync with `tap_widget`.
+pub fn is_tap_activatable(widget: &gtk::Widget) -> bool {
+    widget.downcast_ref::<gtk::Switch>().is_some()
+        || widget.downcast_ref::<gtk::CheckButton>().is_some()
+        || widget.downcast_ref::<gtk::ToggleButton>().is_some()
+        || widget.downcast_ref::<gtk::Button>().is_some()
+}
+
+/// Walk up from `widget` (inclusive) to the nearest ancestor `tap_widget` can
+/// activate. Returns `None` when neither the widget nor any ancestor qualifies.
+///
+/// Used by the **xy** tap path only (issue #12). A coordinate hit-test resolves
+/// the deepest leaf under the point, which for a composite control is a
+/// non-interactive content node — a `gtk::Button::with_label`'s child `GtkLabel`,
+/// or a `GtkStackSwitcher` tab (an auto-generated `GtkToggleButton` whose child
+/// is a `GtkBox` + `GtkLabel`). A real pointer event bubbles up to the
+/// activatable ancestor; retargeting here mirrors that so "looks like a button"
+/// taps actually fire. The selector path is intentionally *not* routed through
+/// this — there the caller named the exact widget to activate.
+///
+/// We walk `parent()` ourselves rather than `Widget::ancestor(Button::static_type())`
+/// because in GTK4 `Switch` and `CheckButton` are not `Button` subclasses, so a
+/// single-type ancestor query would miss them.
+pub fn nearest_activatable(widget: &gtk::Widget) -> Option<gtk::Widget> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        if is_tap_activatable(&w) {
+            return Some(w);
+        }
+        cur = w.parent();
+    }
+    None
+}
+
 /// Locate a widget at window-local coordinates inside `window`.
 ///
 /// Returns the deepest widget whose bounds contain `(x, y)`. Returns
@@ -314,6 +350,81 @@ pub fn focus_widget(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), 
         Err(FocusError::FocusRejected {
             selector: selector.map(str::to_string),
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Key (issue #10)
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the `key` pipeline (issue #10).
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error              | http |
+/// |--------------------|------|
+/// | `UnsupportedKey`   | 422  |
+/// | `NoActiveWindow`   | 422  |
+///
+/// `NoActiveWindow` here means "no `gtk::Application` is installed on the GLib
+/// thread at all" (the `with_app` fallback), not "no window is focused" — a
+/// successful Escape with no open popover is `Ok(false)`, not an error.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KeyError {
+    UnsupportedKey { key: String },
+    NoActiveWindow,
+}
+
+impl std::fmt::Display for KeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KeyError::UnsupportedKey { key } => write!(f, "unsupported_key: {key}"),
+            KeyError::NoActiveWindow => write!(f, "no_active_window"),
+        }
+    }
+}
+
+impl std::error::Error for KeyError {}
+
+/// Dismiss the topmost open `GtkPopover` across all of the app's windows by
+/// calling `popdown()`, the safe-API equivalent of pressing Escape on a modal /
+/// autohide popover (issue #10). Returns `true` if a popover was closed.
+///
+/// "Topmost" is the last visible popover encountered in a depth-first walk of
+/// each window's widget tree. Because a popover's content (and any popover
+/// nested inside it) is walked *after* the popover node itself, DFS order
+/// approximates innermost-last — matching real Escape, which collapses one
+/// modal layer per press. Callers can issue repeated Escapes to unwind nested
+/// popovers.
+///
+/// Only **visible** popovers are considered: a popped-down / unrealized popover
+/// reports `is_visible() == false` and is skipped, so an Escape with nothing
+/// open is a clean `false` no-op rather than a spurious dismissal.
+pub fn dismiss_topmost_popover(app: &gtk::Application) -> bool {
+    let mut topmost: Option<gtk::Popover> = None;
+    for window in app.windows() {
+        collect_topmost_popover(window.upcast_ref::<gtk::Widget>(), &mut topmost);
+    }
+    match topmost {
+        Some(popover) => {
+            popover.popdown();
+            true
+        }
+        None => false,
+    }
+}
+
+/// Depth-first walk recording the last visible `GtkPopover` into `topmost`.
+fn collect_topmost_popover(widget: &gtk::Widget, topmost: &mut Option<gtk::Popover>) {
+    if let Some(popover) = widget.downcast_ref::<gtk::Popover>() {
+        if popover.is_visible() {
+            *topmost = Some(popover.clone());
+        }
+    }
+    let mut cur = widget.first_child();
+    while let Some(child) = cur {
+        collect_topmost_popover(&child, topmost);
+        cur = child.next_sibling();
     }
 }
 
@@ -1007,4 +1118,205 @@ pub fn find_long_press_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::Ges
         cur = parent;
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// set-value (GtkRange / GtkScale)
+//
+// MVP supports any `gtk::Range` (GtkScale, GtkScrollbar) via
+// `Range::set_value`. Future widgets (GtkSpinButton, GtkProgressBar) can be
+// added to `set_value_widget` / `find_range_ancestor` without changing the
+// wire contract. Mirrors the `tap`/`swipe` pragmatism: we apply the value
+// through the safe property API rather than synthesising the click+drag a user
+// would perform, since GTK4-rs cannot synthesise those motion events.
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the set-value pipeline.
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error                  | http |
+/// |------------------------|------|
+/// | `InvalidTarget`        | 422  |
+/// | `InvalidValue`         | 422  |
+/// | `OutOfBounds`          | 422  |
+/// | `WidgetNotVisible`     | 422  |
+/// | `WidgetDisabled`       | 422  |
+/// | `NoActiveWindow`       | 422  |
+/// | `SelectorNotFound`     | 404  |
+/// | `NoRangeAtPoint`       | 404  |
+/// | `NoRangeForSelector`   | 404  |
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetValueError {
+    InvalidTarget { reason: &'static str },
+    InvalidValue { reason: &'static str },
+    OutOfBounds { x: i32, y: i32 },
+    WidgetNotVisible { selector: Option<String> },
+    WidgetDisabled { selector: Option<String> },
+    NoActiveWindow,
+    SelectorNotFound { selector: String },
+    NoRangeAtPoint { x: i32, y: i32 },
+    NoRangeForSelector { selector: String },
+}
+
+impl std::fmt::Display for SetValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetValueError::InvalidTarget { reason } => write!(f, "invalid_target: {reason}"),
+            SetValueError::InvalidValue { reason } => write!(f, "invalid_value: {reason}"),
+            SetValueError::OutOfBounds { x, y } => write!(f, "out_of_bounds: ({x}, {y})"),
+            SetValueError::WidgetNotVisible { selector } => match selector {
+                Some(s) => write!(f, "widget_not_visible: {s}"),
+                None => write!(f, "widget_not_visible"),
+            },
+            SetValueError::WidgetDisabled { selector } => match selector {
+                Some(s) => write!(f, "widget_disabled: {s}"),
+                None => write!(f, "widget_disabled"),
+            },
+            SetValueError::NoActiveWindow => write!(f, "no_active_window"),
+            SetValueError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            SetValueError::NoRangeAtPoint { x, y } => write!(f, "no_range_at_point: ({x}, {y})"),
+            SetValueError::NoRangeForSelector { selector } => {
+                write!(f, "no_range_for_selector: {selector}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetValueError {}
+
+/// Walk parents from `widget` looking for a `gtk::Range` (self first). Returns
+/// the range so the caller can drive it without a second walk. Mirror of
+/// [`find_long_press_gesture_ancestor`] but matches by widget type rather than
+/// by an attached controller.
+pub fn find_range_ancestor(widget: &gtk::Widget) -> Option<gtk::Range> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        if let Ok(range) = w.clone().downcast::<gtk::Range>() {
+            return Some(range);
+        }
+        cur = w.parent();
+    }
+    None
+}
+
+/// Reject non-finite target values up front (defensive twin of the HTTP R1
+/// check) so `set_value` never receives NaN / ±Inf.
+fn validate_value(value: f64) -> Result<(), SetValueError> {
+    if !value.is_finite() {
+        return Err(SetValueError::InvalidValue {
+            reason: "not_finite",
+        });
+    }
+    Ok(())
+}
+
+/// Shared visibility / sensitivity gate so the returned error matches the
+/// user's mental model (mirror of `tap_widget`'s leading checks).
+fn check_interactable(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), SetValueError> {
+    if !widget.is_visible() || !widget.is_mapped() {
+        return Err(SetValueError::WidgetNotVisible {
+            selector: selector.map(str::to_string),
+        });
+    }
+    if !widget.is_sensitive() {
+        return Err(SetValueError::WidgetDisabled {
+            selector: selector.map(str::to_string),
+        });
+    }
+    Ok(())
+}
+
+/// Map a window-local coordinate to the value implied by its position along the
+/// trough, in `[lower, upper - page_size]`.
+///
+/// Best-effort: uses the range widget's full allocation (ignoring trough
+/// padding / slider size), honouring orientation and the `inverted` property.
+/// Horizontal ranges map left→lower, right→upper; vertical ranges map
+/// bottom→lower, top→upper (GTK's default), each flipped when `inverted`. For
+/// an exact value, pass `value` explicitly instead.
+pub fn value_from_coord(range: &gtk::Range, root: &gtk::Widget, xy: XY) -> f64 {
+    let adj = range.adjustment();
+    let lower = adj.lower();
+    let upper = (adj.upper() - adj.page_size()).max(lower);
+    let span = upper - lower;
+    if span <= 0.0 {
+        return lower;
+    }
+    let rect = match range.compute_bounds(root) {
+        Some(r) => r,
+        None => return lower,
+    };
+    let horizontal = range.orientation() == gtk::Orientation::Horizontal;
+    let mut frac = if horizontal {
+        if rect.width() <= 0.0 {
+            0.0
+        } else {
+            (xy.x as f32 - rect.x()) / rect.width()
+        }
+    } else if rect.height() <= 0.0 {
+        0.0
+    } else {
+        1.0 - (xy.y as f32 - rect.y()) / rect.height()
+    } as f64;
+    frac = frac.clamp(0.0, 1.0);
+    if range.is_inverted() {
+        frac = 1.0 - frac;
+    }
+    lower + frac * span
+}
+
+/// Drive a selector-resolved widget's `gtk::Range` to `value`.
+///
+/// The matched widget must itself be a `GtkRange` (selectors name the scale
+/// directly). Runs visibility / sensitivity checks, then `set_value` (which
+/// clamps to the adjustment range). Returns the clamped value actually set.
+pub fn set_value_widget(
+    widget: &gtk::Widget,
+    selector: &str,
+    value: f64,
+) -> Result<f64, SetValueError> {
+    validate_value(value)?;
+    let range =
+        widget
+            .clone()
+            .downcast::<gtk::Range>()
+            .map_err(|_| SetValueError::NoRangeForSelector {
+                selector: selector.to_string(),
+            })?;
+    check_interactable(widget, Some(selector))?;
+    range.set_value(value);
+    Ok(range.value())
+}
+
+/// Drive the `gtk::Range` under window-local `xy` to a value.
+///
+/// `value` is used directly when present; otherwise it is derived from the
+/// point's position via [`value_from_coord`]. Returns the clamped value set.
+pub fn set_value_at(
+    window: &gtk::ApplicationWindow,
+    xy: XY,
+    value: Option<f64>,
+) -> Result<f64, SetValueError> {
+    if let Some(v) = value {
+        validate_value(v)?;
+    }
+    let leaf = resolve_xy(window, xy.x, xy.y).map_err(|e| match e {
+        TapError::OutOfBounds { x, y } => SetValueError::OutOfBounds { x, y },
+        _ => SetValueError::NoRangeAtPoint { x: xy.x, y: xy.y },
+    })?;
+    let range =
+        find_range_ancestor(&leaf).ok_or(SetValueError::NoRangeAtPoint { x: xy.x, y: xy.y })?;
+    check_interactable(range.upcast_ref(), None)?;
+    let final_value = match value {
+        Some(v) => v,
+        None => {
+            let root: gtk::Widget = window.clone().upcast();
+            value_from_coord(&range, &root, xy)
+        }
+    };
+    range.set_value(final_value);
+    Ok(range.value())
 }

@@ -43,6 +43,8 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Pinch,
             Capability::Focus,
             Capability::Press,
+            Capability::SetValue,
+            Capability::Key,
         ],
         token_required: None,
     });
@@ -681,7 +683,10 @@ async fn screenshot_invalid_window_returns_422() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let v = body_json(resp).await;
-    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_window"));
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_window")
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -913,8 +918,10 @@ async fn type_capability_in_info() {
             "pinch",
             "focus",
             "press",
+            "set_value",
+            "key",
         ],
-        "capabilities order must include type, swipe, elements, state, pinch, focus, and press at the tail"
+        "capabilities order must include type, swipe, elements, state, pinch, focus, press, set_value, and key at the tail"
     );
 }
 
@@ -2267,6 +2274,581 @@ async fn press_selector_not_found_404() {
     assert_eq!(
         v.get("error").and_then(Value::as_str),
         Some("selector_not_found")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- set-value capability (GtkRange / GtkScale) -----
+
+#[tokio::test]
+async fn set_value_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn set_value_missing_target_422() {
+    // R1: neither selector nor xy provided is 422 invalid_target.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "value": 50.0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_target")
+    );
+}
+
+#[tokio::test]
+async fn set_value_both_targets_422() {
+    // R1: providing both selector and xy is 422.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({
+        "selector": "#scale1",
+        "xy": {"x": 10, "y": 10},
+        "value": 50.0,
+    });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_target")
+    );
+}
+
+#[tokio::test]
+async fn set_value_selector_without_value_422() {
+    // R1: selector mode requires an explicit value.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "selector": "#scale1" });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_target")
+    );
+}
+
+#[tokio::test]
+async fn set_value_invalid_selector_422() {
+    // R1: selector syntax errors surface as 422 invalid_selector (ahead of the
+    // 404 dispatch fallback), mirroring press.
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "selector": "@bad", "value": 1.0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_selector")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_value_selector_returns_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-setvalue-200")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let scale = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, 100.0, 1.0);
+    scale.set_widget_name("scale1");
+    scale.set_hexpand(true);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&scale)
+        .default_width(400)
+        .default_height(120)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({ "selector": "#scale1", "value": 37.0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(scale.value(), 37.0);
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn set_value_no_range_for_selector_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-setvalue-norange")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    // Selector matches a non-range widget → 404 no_range_for_selector.
+    let label = gtk::Label::new(Some("not a range"));
+    label.set_widget_name("label1");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&label)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({ "selector": "#label1", "value": 10.0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/set-value")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("no_range_for_selector")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- key route (issue #10) -----
+
+#[tokio::test]
+async fn key_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn key_unsupported_key_422() {
+    let (mut state, _tx) = make_state();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    state.cmd_tx = cmd_tx;
+    // No GTK setup; respond to MainCmd::Key directly with the error
+    // `dispatch_key` would emit for a non-Escape key on the GLib thread.
+    tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            if let MainCmd::Key { key, reply } = cmd {
+                let _ = reply.send(Err(gtk4_e2e_server::input::KeyError::UnsupportedKey {
+                    key,
+                }));
+            }
+        }
+    });
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"key": "Enter"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("unsupported_key")
+    );
+    assert_eq!(v.get("key").and_then(Value::as_str), Some("Enter"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn tap_main_thread_unresponsive_503() {
+    // Issue #10: a `tap` that wedges the receiver loop (modal grab) must not
+    // hang the HTTP request forever. The receiver here accepts the command but
+    // never replies (holding the sender alive, mirroring a blocked
+    // `emit_clicked`); the bounded-dispatch timeout must convert that into a
+    // 503 the test client can handle. `start_paused` auto-advances the virtual
+    // clock past `DISPATCH_TIMEOUT_MS` so the test is instant.
+    let (mut state, _tx) = make_state();
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    state.cmd_tx = cmd_tx;
+    tokio::spawn(async move {
+        let mut held = Vec::new();
+        while let Some(cmd) = cmd_rx.recv().await {
+            // Keep the reply sender alive without ever sending — the request
+            // stays pending until the HTTP-side timeout fires.
+            held.push(cmd);
+        }
+    });
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/tap")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"selector\":\"#btn1\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("main_thread_unresponsive")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn key_escape_closes_popover_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetestkey1")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let trigger = gtk::Button::with_label("open");
+    trigger.set_widget_name("open-dialog-button");
+    let popover = gtk::Popover::builder().autohide(true).build();
+    popover.set_widget_name("confirm-popover");
+    let cancel = gtk::Button::with_label("Cancel");
+    cancel.set_widget_name("dialog-cancel-button");
+    popover.set_child(Some(&cancel));
+    popover.set_parent(&trigger);
+
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&trigger);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&vbox)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    // Open the popover and confirm it is actually visible before pressing Escape.
+    popover.popup();
+    common::pump_glib(64);
+    assert!(
+        popover.is_visible(),
+        "popover should be open before the Escape key"
+    );
+
+    install_app(app_gtk);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"key": "Escape"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("closed_popover").and_then(Value::as_bool), Some(true));
+
+    common::pump_glib(64);
+    assert!(
+        !popover.is_visible(),
+        "popover should be dismissed after the Escape key"
+    );
+
+    popover.unparent();
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn key_escape_no_popover_returns_false_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetestkey2")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/key")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"key": "Escape"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("closed_popover").and_then(Value::as_bool),
+        Some(false)
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- tap xy → nearest activatable ancestor (issue #12) -----
+
+#[tokio::test(flavor = "current_thread")]
+async fn tap_xy_retargets_to_button_ancestor_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetestxy1")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    // `Button::with_label` wraps a `GtkLabel`; a coordinate hit-test lands on
+    // that label (the deepest leaf), which is not activatable on its own. The
+    // issue #12 fallback must walk up to the `Button` and fire `clicked`.
+    let button = gtk::Button::with_label("press me");
+    let fired = std::rc::Rc::new(std::cell::Cell::new(false));
+    {
+        let fired = fired.clone();
+        button.connect_clicked(move |_| fired.set(true));
+    }
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&button)
+        .default_width(120)
+        .default_height(40)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    // Centre of the button in window-local coords; the leaf there is the label.
+    let bounds = button
+        .compute_bounds(&window)
+        .expect("button should have bounds once mapped");
+    let cx = (bounds.x() + bounds.width() / 2.0) as i32;
+    let cy = (bounds.y() + bounds.height() / 2.0) as i32;
+
+    install_app(app_gtk);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/tap")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"xy": {"x": cx, "y": cy}}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(
+        fired.get(),
+        "tap at the button label's coords should fire the ancestor Button's clicked"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tap_xy_no_activatable_ancestor_422() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetestxy2")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    // A bare Label under a Box: nothing up the chain is activatable, so the
+    // fallback finds no target and the leaf (GtkLabel) drives the 422 — the
+    // pre-issue-#12 behaviour, preserved as a regression guard.
+    let label = gtk::Label::new(Some("plain text"));
+    let vbox = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    vbox.append(&label);
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&vbox)
+        .default_width(120)
+        .default_height(40)
+        .build();
+    window.present();
+    common::pump_glib(64);
+
+    let bounds = label
+        .compute_bounds(&window)
+        .expect("label should have bounds once mapped");
+    let cx = (bounds.x() + bounds.width() / 2.0) as i32;
+    let cy = (bounds.y() + bounds.height() / 2.0) as i32;
+
+    install_app(app_gtk);
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/tap")
+                .header("content-type", "application/json")
+                .body(Body::from(json!({"xy": {"x": cx, "y": cy}}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("tap_unsupported_widget")
+    );
+    assert_eq!(
+        v.get("widget_type").and_then(Value::as_str),
+        Some("GtkLabel")
     );
 
     window.close();

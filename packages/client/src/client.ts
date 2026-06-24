@@ -26,8 +26,11 @@ import type {
   ElementsResponse,
   FocusRequest,
   Info,
+  KeyRequest,
+  KeyResult,
   PinchRequest,
   PressRequest,
+  SetValueRequest,
   TapTarget,
   TypeRequest,
   WaitCondition,
@@ -278,6 +281,70 @@ export class E2EClient {
       body,
       capability: "press",
       expect: "void",
+    });
+  }
+
+  /**
+   * Drive a `GtkRange` (GtkScale / GtkScrollbar) to a value via
+   * `Range::set_value` (fires `value-changed` / `notify::value`). Exactly one
+   * of `selector` / `xy` selects the target:
+   *   - `selector`: names the range directly; `value` is **required**.
+   *   - `xy`: window-local pixel coords; the range under the point is targeted.
+   *
+   * `value` is used directly when present (clamped server-side to the
+   * adjustment range); when absent (xy only) it is derived from the point's
+   * position along the trough (best-effort, orientation/inverted-aware).
+   *
+   * Errors:
+   *   - 404 selector_not_found / no_range_at_point / no_range_for_selector
+   *   - 422 invalid_target / invalid_value / invalid_selector /
+   *         out_of_bounds / widget_not_visible / widget_disabled /
+   *         no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async setValue(opts: {
+    selector?: string;
+    xy?: { x: number; y: number };
+    value?: number;
+  }): Promise<void> {
+    const body: SetValueRequest = {
+      selector: opts.selector,
+      xy: opts.xy,
+      value: opts.value,
+    };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/set-value",
+      body,
+      capability: "set_value",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Press a key by GDK key name (issue #10). The MVP supports `"Escape"` only,
+   * which dismisses the topmost open `GtkPopover` via `popdown()` — the safe
+   * escape hatch for closing a modal / autohide popover (a confirm dialog) that
+   * would otherwise leave `tap` blocked under the popover's modal grab.
+   *
+   * Resolves to `{ closed_popover }`: `true` if a popover was actually closed,
+   * `false` if nothing was open (a successful no-op, **not** an error — mirrors
+   * a real Escape press with no modal grab).
+   *
+   * Errors:
+   *   - 422 unsupported_key       — key name outside the MVP set (only Escape)
+   *   - 422 no_active_window      — no application window exists
+   *   - 503 main_thread_unresponsive — the GLib main thread is wedged (issue #10)
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async key(key: string): Promise<KeyResult> {
+    const body: KeyRequest = { key };
+    return await this._request<KeyResult>({
+      method: "POST",
+      path: "/test/key",
+      body,
+      capability: "key",
+      expect: "json",
     });
   }
 

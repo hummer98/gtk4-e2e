@@ -1,0 +1,15 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "Success body of `POST /test/key`.\n\n`closed_popover` reports whether an open popover was actually dismissed by the (Escape) key. `false` is **not** an error — it simply means there was no open popover to close, mirroring how a real Escape press is a no-op when nothing has a modal grab. Tests can assert on this to confirm the dialog was open before they pressed Escape.",
+  "properties": {
+    "closed_popover": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "closed_popover"
+  ],
+  "title": "KeyResult",
+  "type": "object"
+}
