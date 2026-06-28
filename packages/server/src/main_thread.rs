@@ -22,8 +22,13 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
-use crate::input::{FocusError, KeyError, PinchError, PressError, SwipeError, TapError, TypeError};
-use crate::proto::{ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, XY};
+use crate::input::{
+    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError,
+    TouchDragError, TypeError,
+};
+use crate::proto::{
+    ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, Waypoint, XY,
+};
 use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
@@ -123,6 +128,27 @@ pub enum MainCmd {
     Key {
         key: String,
         reply: oneshot::Sender<Result<(), KeyError>>,
+    },
+    /// Drive a `GtkRange` (GtkScale / GtkScrollbar) to a value via
+    /// `Range::set_value`. Exactly one of `selector` / `xy` is set (HTTP layer
+    /// enforces this). Instantaneous: replies as soon as the value is applied.
+    SetValue {
+        selector: Option<String>,
+        xy: Option<XY>,
+        value: Option<f64>,
+        reply: oneshot::Sender<Result<(), SetValueError>>,
+    },
+    /// Drive a held touch-drag (press-hold → drag → release) as a single
+    /// `GtkGestureDrag` sequence (issue #13). Exactly one of `selector` / `xy`
+    /// is set (HTTP layer enforces this). Replies on the sequence's completion,
+    /// mirroring `Press` / `Swipe`.
+    TouchDrag {
+        selector: Option<String>,
+        xy: Option<XY>,
+        hold_ms: u64,
+        waypoints: Vec<Waypoint>,
+        release: bool,
+        reply: oneshot::Sender<Result<(), TouchDragError>>,
     },
 }
 
@@ -280,6 +306,37 @@ fn handle_cmd(cmd: MainCmd) {
             let outcome = with_app(|app| crate::wait::dispatch_key(app, &key))
                 .unwrap_or(Err(KeyError::NoActiveWindow));
             let _ = reply.send(outcome);
+        }
+        MainCmd::SetValue {
+            selector,
+            xy,
+            value,
+            reply,
+        } => {
+            let outcome = with_app(|app| crate::wait::dispatch_set_value(app, selector, xy, value))
+                .unwrap_or(Err(SetValueError::NoActiveWindow));
+            let _ = reply.send(outcome);
+        }
+        MainCmd::TouchDrag {
+            selector,
+            xy,
+            hold_ms,
+            waypoints,
+            release,
+            reply,
+        } => {
+            // Same APP.with-direct-borrow trick as Swipe / Pinch / Press so the
+            // `Some/None` arms can each consume `reply`.
+            APP.with(|slot| match slot.borrow().as_ref() {
+                Some(app) => {
+                    crate::wait::dispatch_touch_drag(
+                        app, selector, xy, hold_ms, waypoints, release, reply,
+                    );
+                }
+                None => {
+                    let _ = reply.send(Err(TouchDragError::NoActiveWindow));
+                }
+            });
         }
     }
 }

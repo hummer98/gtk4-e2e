@@ -1,0 +1,82 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "Waypoint": {
+      "description": "One waypoint of a `POST /test/touch-drag` path (issue #13).\n\n`dx` / `dy` are pixel offsets **from the drag start point** (not from the previous waypoint), matching `gtk::GestureDrag`'s `drag-update` offset semantics so wedge / direction logic that reads the cumulative offset sees exactly these values. A single waypoint `{dx: 0, dy: -120}` drags 120 px up.\n\n`Eq` is intentionally omitted: `f64` is not `Eq` (parity with `PinchRequest`).",
+      "properties": {
+        "dx": {
+          "format": "double",
+          "type": "number"
+        },
+        "dy": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "dx",
+        "dy"
+      ],
+      "type": "object"
+    },
+    "XY": {
+      "description": "Window-local pixel coordinates (top-left origin).",
+      "properties": {
+        "x": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "y": {
+          "format": "int32",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "Body of `POST /test/touch-drag` (issue #13).\n\nDrives a held touch sequence — press-down → hold(`hold_ms`) → drag through `waypoints` → optional release — as a **single `gtk::GestureDrag` sequence**: the server emits `drag-begin` at the start point, waits `hold_ms` of real wall-clock (so an app-side long-press timer crosses its threshold without movement), then emits `drag-update` for each waypoint, and finally `drag-end` when `release` is true. This mirrors the `tap`/`swipe`/`press` pragmatism: GTK4's safe APIs cannot synthesise raw motion events, so we drive the gesture's signals directly — the app's `connect_drag_begin` / `connect_drag_update` / `connect_drag_end` handlers see one coherent sequence.\n\nExactly one of `selector` / `xy` selects the drag origin (HTTP 422 otherwise). The target widget or an ancestor must carry a `GtkGestureDrag` (or subclass); otherwise `no_draggable_*` (404).\n\n`hold_ms` is bounded to 1..=10000 (`invalid_hold`). `waypoints` may be empty (a pure press-hold-release) and is capped (`too_many_waypoints`).\n\n`release` defaults to `true`. `release: false` leaves the gesture mid-drag (no `drag-end`) so the highlighted / armed state can be screenshot-verified before a follow-up call releases it.\n\n`Eq` is intentionally omitted: `Waypoint` carries `f64`.",
+  "properties": {
+    "hold_ms": {
+      "format": "uint64",
+      "minimum": 0.0,
+      "type": "integer"
+    },
+    "release": {
+      "default": true,
+      "type": "boolean"
+    },
+    "selector": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "waypoints": {
+      "default": [],
+      "items": {
+        "$ref": "#/definitions/Waypoint"
+      },
+      "type": "array"
+    },
+    "xy": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/XY"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "hold_ms"
+  ],
+  "title": "TouchDragRequest",
+  "type": "object"
+}

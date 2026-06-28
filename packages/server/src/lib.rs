@@ -182,6 +182,8 @@ mod start_impl {
                 Capability::Focus,
                 Capability::Press,
                 Capability::Key,
+                Capability::SetValue,
+                Capability::TouchDrag,
             ],
             token_required: token.as_ref().map(|_| true),
         });

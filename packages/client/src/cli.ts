@@ -41,6 +41,9 @@ Subcommands:
   swipe <x1,y1> <x2,y2>             POST /test/swipe (default duration 300ms)
   pinch <x,y> <scale>               POST /test/pinch (default duration 300ms)
   press <selector|x,y> <hold_ms>    POST /test/press (GestureLongPress)
+  touch-drag <selector|x,y> <hold_ms> [--waypoints '<json>'] [--no-release]
+                                    POST /test/touch-drag (held GtkGestureDrag:
+                                    press-hold → drag waypoints → release)
   key <Escape>                      POST /test/key — dismiss the open modal popover
   screenshot <out.png>                                 GET /test/screenshot → save to file
   screenshot <name> --baseline <path>                  diff against baseline (exit 1 on mismatch)
@@ -103,6 +106,8 @@ interface ParsedArgs {
     baseline?: string;
     updateBaseline: boolean;
     threshold?: number;
+    waypoints?: string;
+    noRelease: boolean;
     verbose: boolean;
     help: boolean;
   };
@@ -112,7 +117,7 @@ function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = {
     subcommand: null,
     positional: [],
-    flags: { help: false, verbose: false, updateBaseline: false },
+    flags: { help: false, verbose: false, updateBaseline: false, noRelease: false },
   };
 
   for (let i = 0; i < argv.length; i++) {
@@ -181,6 +186,16 @@ function parseArgs(argv: string[]): ParsedArgs {
       if (!Number.isFinite(n) || n <= 0)
         throw new ArgvError(`--duration: not a positive integer: ${v}`);
       result.flags.duration = n;
+      continue;
+    }
+    if (a === "--waypoints") {
+      const v = argv[++i];
+      if (v === undefined) throw new ArgvError("--waypoints requires a JSON value");
+      result.flags.waypoints = v;
+      continue;
+    }
+    if (a === "--no-release") {
+      result.flags.noRelease = true;
       continue;
     }
     if (a === "--selector") {
@@ -435,6 +450,42 @@ async function runKey(parsed: ParsedArgs): Promise<void> {
   await client.key(parsed.positional[0]);
 }
 
+function parseWaypoints(arg: string | undefined): Array<{ dx: number; dy: number }> {
+  if (arg === undefined) return [];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(arg);
+  } catch {
+    throw new ArgvError(`touch-drag: --waypoints must be JSON, got: ${arg}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new ArgvError("touch-drag: --waypoints must be a JSON array of {dx,dy}");
+  }
+  return parsed.map((w, idx) => {
+    const obj = w as Record<string, unknown>;
+    const dx = obj?.dx;
+    const dy = obj?.dy;
+    if (typeof dx !== "number" || typeof dy !== "number") {
+      throw new ArgvError(`touch-drag: waypoint[${idx}] must be {dx:number, dy:number}`);
+    }
+    return { dx, dy };
+  });
+}
+async function runTouchDrag(parsed: ParsedArgs): Promise<void> {
+  if (parsed.positional.length < 2) {
+    throw new ArgvError("touch-drag requires <selector|x,y> <hold_ms>");
+  }
+  const target = parseTapTarget(parsed.positional[0]);
+  const holdMs = parseHoldMs(parsed.positional[1]);
+  const waypoints = parseWaypoints(parsed.flags.waypoints);
+  const release = !parsed.flags.noRelease;
+  const client = await buildClient(parsed);
+  const base = { holdMs, waypoints, release };
+  await client.touchDrag(
+    typeof target === "string" ? { selector: target, ...base } : { xy: target, ...base },
+  );
+}
+
 async function runElements(parsed: ParsedArgs): Promise<void> {
   const client = await buildClient(parsed);
   const resp = await client.elements({
@@ -668,6 +719,9 @@ async function main(argv: string[]): Promise<number> {
         return 0;
       case "press":
         await runPress(parsed);
+        return 0;
+      case "touch-drag":
+        await runTouchDrag(parsed);
         return 0;
       case "key":
         await runKey(parsed);

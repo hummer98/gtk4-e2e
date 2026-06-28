@@ -158,11 +158,7 @@ pub fn validate_tap(widget: &gtk::Widget, selector: Option<&str>) -> Result<TapP
             selector: selector.map(str::to_string),
         });
     }
-    let supported = widget.downcast_ref::<gtk::Switch>().is_some()
-        || widget.downcast_ref::<gtk::CheckButton>().is_some()
-        || widget.downcast_ref::<gtk::ToggleButton>().is_some()
-        || widget.downcast_ref::<gtk::Button>().is_some();
-    if !supported {
+    if !is_tap_activatable(widget) {
         return Err(TapError::UnsupportedWidget {
             widget_type: widget.type_().name().to_string(),
         });
@@ -170,6 +166,42 @@ pub fn validate_tap(widget: &gtk::Widget, selector: Option<&str>) -> Result<TapP
     Ok(TapPlan {
         widget: widget.clone(),
     })
+}
+
+/// True if a tap can activate `widget` directly — i.e. it is one of the kinds
+/// `validate_tap` / `TapPlan` handle (`Switch` / `CheckButton` / `ToggleButton`
+/// / `Button`). Single source of truth shared with the xy ancestor walk.
+pub fn is_tap_activatable(widget: &gtk::Widget) -> bool {
+    widget.downcast_ref::<gtk::Switch>().is_some()
+        || widget.downcast_ref::<gtk::CheckButton>().is_some()
+        || widget.downcast_ref::<gtk::ToggleButton>().is_some()
+        || widget.downcast_ref::<gtk::Button>().is_some()
+}
+
+/// Walk up from `widget` (inclusive) to the nearest ancestor a tap can
+/// activate. Returns `None` when neither the widget nor any ancestor qualifies.
+///
+/// Used by the **xy** tap path only (issue #12). A coordinate hit-test resolves
+/// the deepest leaf under the point, which for a composite control is a
+/// non-interactive content node — a `gtk::Button::with_label`'s child `GtkLabel`,
+/// or a `GtkStackSwitcher` tab (an auto-generated `GtkToggleButton` whose child
+/// is a `GtkBox` + `GtkLabel`). A real pointer event bubbles up to the
+/// activatable ancestor; retargeting here mirrors that so "looks like a button"
+/// taps actually fire. The selector path is intentionally *not* routed through
+/// this — there the caller named the exact widget to activate.
+///
+/// We walk `parent()` ourselves rather than `Widget::ancestor(Button::static_type())`
+/// because in GTK4 `Switch` and `CheckButton` are not `Button` subclasses, so a
+/// single-type ancestor query would miss them.
+pub fn nearest_activatable(widget: &gtk::Widget) -> Option<gtk::Widget> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        if is_tap_activatable(&w) {
+            return Some(w);
+        }
+        cur = w.parent();
+    }
+    None
 }
 
 /// Locate a widget at window-local coordinates inside `window`.
@@ -1148,4 +1180,506 @@ pub fn find_open_autohide_popover(root: &gtk::Widget) -> Option<gtk::Popover> {
         cur = child.next_sibling();
     }
     None
+}
+
+// ---------------------------------------------------------------------------
+// Touch-drag (issue #13) — held GtkGestureDrag sequence
+//
+// Drives a press-hold → drag → release as a single `gtk::GestureDrag` sequence
+// by emitting `drag-begin` / `drag-update` / `drag-end` directly, with a real
+// `hold_ms` wall-clock pause before the first move so an app-side long-press
+// timer crosses its threshold. Same pragmatism as press/pinch/swipe: GTK4-rs
+// cannot synthesise raw motion events, so we drive the gesture's signals.
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the touch-drag pipeline (issue #13).
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error                       | http |
+/// |-----------------------------|------|
+/// | `ZeroHold`                  | 422  |
+/// | `HoldTooLong`               | 422  |
+/// | `TooManyWaypoints`          | 422  |
+/// | `OutOfBounds`               | 422  |
+/// | `NoActiveWindow`            | 422  |
+/// | `InvalidTarget`             | 422  |
+/// | `NoDraggableAtPoint`        | 404  |
+/// | `SelectorNotFound`          | 404  |
+/// | `NoDraggableForSelector`    | 404  |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TouchDragError {
+    ZeroHold,
+    HoldTooLong { hold_ms: u64 },
+    TooManyWaypoints { count: usize },
+    OutOfBounds { x: i32, y: i32 },
+    NoActiveWindow,
+    NoDraggableAtPoint { x: i32, y: i32 },
+    SelectorNotFound { selector: String },
+    NoDraggableForSelector { selector: String },
+    InvalidTarget { reason: &'static str },
+}
+
+impl std::fmt::Display for TouchDragError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TouchDragError::ZeroHold => write!(f, "invalid_hold: zero"),
+            TouchDragError::HoldTooLong { hold_ms } => {
+                write!(f, "invalid_hold: too_long ({hold_ms} ms)")
+            }
+            TouchDragError::TooManyWaypoints { count } => {
+                write!(f, "too_many_waypoints: {count}")
+            }
+            TouchDragError::OutOfBounds { x, y } => write!(f, "out_of_bounds: ({x}, {y})"),
+            TouchDragError::NoActiveWindow => write!(f, "no_active_window"),
+            TouchDragError::NoDraggableAtPoint { x, y } => {
+                write!(f, "no_draggable_at_point: ({x}, {y})")
+            }
+            TouchDragError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            TouchDragError::NoDraggableForSelector { selector } => {
+                write!(f, "no_draggable_for_selector: {selector}")
+            }
+            TouchDragError::InvalidTarget { reason } => write!(f, "invalid_target: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for TouchDragError {}
+
+/// Upper bound on `hold_ms` — shared with the press semantics (a hold beyond
+/// 10 s in a test is almost certainly a mistake).
+pub const MAX_TOUCH_DRAG_HOLD_MS: u64 = 10_000;
+
+/// Upper bound on the number of waypoints in one touch-drag. Bounds the timer
+/// work scheduled on the GLib thread; a real radial-menu drag needs only a
+/// handful of waypoints.
+pub const MAX_TOUCH_DRAG_WAYPOINTS: usize = 64;
+
+/// Interval between successive `drag-update` emits (and the final `drag-end`).
+/// One ~60 fps frame, mirroring `SwipeAnimation`'s per-frame cadence.
+const TOUCH_DRAG_STEP_MS: u64 = 16;
+
+/// One scheduled step after the hold elapses.
+enum TouchDragEvent {
+    Update(f64, f64),
+    End(f64, f64),
+}
+
+/// Plan output from the `validate_touch_drag*` helpers: the resolved
+/// `GestureDrag`, the start point, the hold delay, the cumulative offsets to
+/// pass through, and whether to release at the end. Pure (no timer scheduled,
+/// no widget mutation) so the HTTP layer can inspect validation outcomes before
+/// crossing onto the GLib thread.
+pub struct TouchDragAnimation {
+    gesture: gtk::GestureDrag,
+    start_x: f64,
+    start_y: f64,
+    hold_ms: u64,
+    /// Cumulative (from-start) offsets, one per waypoint, in order.
+    offsets: Vec<(f64, f64)>,
+    release: bool,
+}
+
+impl TouchDragAnimation {
+    /// Emit `drag-begin` immediately (the finger-down), then after `hold_ms` of
+    /// real wall-clock drain the waypoints as `drag-update` emits at
+    /// `TOUCH_DRAG_STEP_MS` cadence, and finally `drag-end` when `release`.
+    /// `on_complete` fires once the last event has been emitted. Must be called
+    /// on the GLib main thread.
+    ///
+    /// `drag-begin(start_x, start_y)` / `drag-update(offset_x, offset_y)` /
+    /// `drag-end(offset_x, offset_y)` are `gtk::GestureDrag`'s signal
+    /// signatures; the `emit_by_name` turbofish is `<()>` because they return
+    /// void (mirror of `LongPressAnimation` / `PinchAnimation`).
+    pub fn run<F: FnOnce() + 'static>(self, on_complete: F) {
+        let TouchDragAnimation {
+            gesture,
+            start_x,
+            start_y,
+            hold_ms,
+            offsets,
+            release,
+        } = self;
+
+        gesture.emit_by_name::<()>("drag-begin", &[&start_x, &start_y]);
+
+        // Post-hold event queue: each waypoint as an update, then the end (at
+        // the last offset, or the origin if there were no waypoints) on release.
+        let mut events: std::collections::VecDeque<TouchDragEvent> = offsets
+            .iter()
+            .map(|&(ox, oy)| TouchDragEvent::Update(ox, oy))
+            .collect();
+        if release {
+            let (eox, eoy) = offsets.last().copied().unwrap_or((0.0, 0.0));
+            events.push_back(TouchDragEvent::End(eox, eoy));
+        }
+
+        // Hold for `hold_ms` (no movement), then step through the queue. A
+        // one-shot for the hold, then a periodic drain — keeps the begin→first
+        // move gap ≥ hold_ms so an app long-press timer fires.
+        let mut on_complete_slot = Some(on_complete);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(hold_ms), move || {
+            if events.is_empty() {
+                if let Some(cb) = on_complete_slot.take() {
+                    cb();
+                }
+                return;
+            }
+            let events = std::cell::RefCell::new(events);
+            glib::timeout_add_local(
+                std::time::Duration::from_millis(TOUCH_DRAG_STEP_MS),
+                move || match events.borrow_mut().pop_front() {
+                    Some(TouchDragEvent::Update(ox, oy)) => {
+                        gesture.emit_by_name::<()>("drag-update", &[&ox, &oy]);
+                        glib::ControlFlow::Continue
+                    }
+                    Some(TouchDragEvent::End(ox, oy)) => {
+                        gesture.emit_by_name::<()>("drag-end", &[&ox, &oy]);
+                        glib::ControlFlow::Continue
+                    }
+                    None => {
+                        if let Some(cb) = on_complete_slot.take() {
+                            cb();
+                        }
+                        glib::ControlFlow::Break
+                    }
+                },
+            );
+        });
+    }
+}
+
+/// Validate the shared touch-drag parameters (`hold_ms`, waypoint count).
+fn validate_touch_drag_params(hold_ms: u64, waypoint_count: usize) -> Result<(), TouchDragError> {
+    if hold_ms == 0 {
+        return Err(TouchDragError::ZeroHold);
+    }
+    if hold_ms > MAX_TOUCH_DRAG_HOLD_MS {
+        return Err(TouchDragError::HoldTooLong { hold_ms });
+    }
+    if waypoint_count > MAX_TOUCH_DRAG_WAYPOINTS {
+        return Err(TouchDragError::TooManyWaypoints {
+            count: waypoint_count,
+        });
+    }
+    Ok(())
+}
+
+/// Validate an xy-targeted touch-drag and prepare a [`TouchDragAnimation`].
+///
+/// Pure. Order: param validation → window bounds (with `default_size` fallback
+/// for pre-mapped quartz, mirror of `validate_press`) → xy leaf resolution →
+/// ancestor walk for `GestureDrag`. The start point is the requested `center`.
+pub fn validate_touch_drag(
+    window: &gtk::ApplicationWindow,
+    center: XY,
+    hold_ms: u64,
+    offsets: Vec<(f64, f64)>,
+    release: bool,
+) -> Result<TouchDragAnimation, TouchDragError> {
+    validate_touch_drag_params(hold_ms, offsets.len())?;
+
+    let alloc = window.allocation();
+    let (mut w, mut h) = (alloc.width(), alloc.height());
+    if w <= 0 || h <= 0 {
+        let (dw, dh) = window.default_size();
+        if dw > 0 {
+            w = dw;
+        }
+        if dh > 0 {
+            h = dh;
+        }
+    }
+    if center.x < 0 || center.y < 0 || center.x >= w || center.y >= h {
+        return Err(TouchDragError::OutOfBounds {
+            x: center.x,
+            y: center.y,
+        });
+    }
+
+    let leaf = match resolve_xy(window, center.x, center.y) {
+        Ok(w) => w,
+        Err(TapError::OutOfBounds { x, y }) => return Err(TouchDragError::OutOfBounds { x, y }),
+        Err(_) => {
+            return Err(TouchDragError::NoDraggableAtPoint {
+                x: center.x,
+                y: center.y,
+            });
+        }
+    };
+
+    let gesture = find_drag_gesture_ancestor(&leaf).ok_or(TouchDragError::NoDraggableAtPoint {
+        x: center.x,
+        y: center.y,
+    })?;
+
+    Ok(TouchDragAnimation {
+        gesture,
+        start_x: center.x as f64,
+        start_y: center.y as f64,
+        hold_ms,
+        offsets,
+        release,
+    })
+}
+
+/// Validate a selector-targeted touch-drag against an already-resolved `widget`
+/// and prepare a [`TouchDragAnimation`].
+///
+/// Pure. The `GestureDrag` is searched on the widget or an ancestor (not found
+/// ⇒ `NoDraggableForSelector`). The start point is the widget centre via
+/// `widget.compute_bounds(widget)` (mirror of `validate_press_widget`).
+pub fn validate_touch_drag_widget(
+    widget: &gtk::Widget,
+    selector: &str,
+    hold_ms: u64,
+    offsets: Vec<(f64, f64)>,
+    release: bool,
+) -> Result<TouchDragAnimation, TouchDragError> {
+    validate_touch_drag_params(hold_ms, offsets.len())?;
+
+    let gesture = find_drag_gesture_ancestor(widget).ok_or_else(|| {
+        TouchDragError::NoDraggableForSelector {
+            selector: selector.to_string(),
+        }
+    })?;
+
+    let (start_x, start_y) = widget
+        .compute_bounds(widget)
+        .map(|r| ((r.width() / 2.0) as f64, (r.height() / 2.0) as f64))
+        .unwrap_or((0.0, 0.0));
+
+    Ok(TouchDragAnimation {
+        gesture,
+        start_x,
+        start_y,
+        hold_ms,
+        offsets,
+        release,
+    })
+}
+
+/// Walk parents from `widget` looking for an attached `gtk::GestureDrag` (or a
+/// subclass — a custom radial-menu gesture typically extends `GestureDrag`).
+/// Returns the gesture so the caller can drive it without a second walk. Mirror
+/// of [`find_long_press_gesture_ancestor`].
+pub fn find_drag_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::GestureDrag> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        let parent = w.parent();
+        let controllers = w.observe_controllers();
+        let n = controllers.n_items();
+        for i in 0..n {
+            if let Some(item) = controllers.item(i) {
+                if let Ok(drag) = item.downcast::<gtk::GestureDrag>() {
+                    return Some(drag);
+                }
+            }
+        }
+        cur = parent;
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// set-value (GtkRange / GtkScale)
+//
+// MVP supports any `gtk::Range` (GtkScale, GtkScrollbar) via
+// `Range::set_value`. Future widgets (GtkSpinButton, GtkProgressBar) can be
+// added to `set_value_widget` / `find_range_ancestor` without changing the
+// wire contract. Mirrors the `tap`/`swipe` pragmatism: we apply the value
+// through the safe property API rather than synthesising the click+drag a user
+// would perform, since GTK4-rs cannot synthesise those motion events.
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the set-value pipeline.
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error                  | http |
+/// |------------------------|------|
+/// | `InvalidTarget`        | 422  |
+/// | `InvalidValue`         | 422  |
+/// | `OutOfBounds`          | 422  |
+/// | `WidgetNotVisible`     | 422  |
+/// | `WidgetDisabled`       | 422  |
+/// | `NoActiveWindow`       | 422  |
+/// | `SelectorNotFound`     | 404  |
+/// | `NoRangeAtPoint`       | 404  |
+/// | `NoRangeForSelector`   | 404  |
+#[derive(Debug, Clone, PartialEq)]
+pub enum SetValueError {
+    InvalidTarget { reason: &'static str },
+    InvalidValue { reason: &'static str },
+    OutOfBounds { x: i32, y: i32 },
+    WidgetNotVisible { selector: Option<String> },
+    WidgetDisabled { selector: Option<String> },
+    NoActiveWindow,
+    SelectorNotFound { selector: String },
+    NoRangeAtPoint { x: i32, y: i32 },
+    NoRangeForSelector { selector: String },
+}
+
+impl std::fmt::Display for SetValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SetValueError::InvalidTarget { reason } => write!(f, "invalid_target: {reason}"),
+            SetValueError::InvalidValue { reason } => write!(f, "invalid_value: {reason}"),
+            SetValueError::OutOfBounds { x, y } => write!(f, "out_of_bounds: ({x}, {y})"),
+            SetValueError::WidgetNotVisible { selector } => match selector {
+                Some(s) => write!(f, "widget_not_visible: {s}"),
+                None => write!(f, "widget_not_visible"),
+            },
+            SetValueError::WidgetDisabled { selector } => match selector {
+                Some(s) => write!(f, "widget_disabled: {s}"),
+                None => write!(f, "widget_disabled"),
+            },
+            SetValueError::NoActiveWindow => write!(f, "no_active_window"),
+            SetValueError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            SetValueError::NoRangeAtPoint { x, y } => write!(f, "no_range_at_point: ({x}, {y})"),
+            SetValueError::NoRangeForSelector { selector } => {
+                write!(f, "no_range_for_selector: {selector}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SetValueError {}
+
+/// Walk parents from `widget` looking for a `gtk::Range` (self first). Returns
+/// the range so the caller can drive it without a second walk. Mirror of
+/// [`find_long_press_gesture_ancestor`] but matches by widget type rather than
+/// by an attached controller.
+pub fn find_range_ancestor(widget: &gtk::Widget) -> Option<gtk::Range> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        if let Ok(range) = w.clone().downcast::<gtk::Range>() {
+            return Some(range);
+        }
+        cur = w.parent();
+    }
+    None
+}
+
+/// Reject non-finite target values up front (defensive twin of the HTTP R1
+/// check) so `set_value` never receives NaN / ±Inf.
+fn validate_value(value: f64) -> Result<(), SetValueError> {
+    if !value.is_finite() {
+        return Err(SetValueError::InvalidValue {
+            reason: "not_finite",
+        });
+    }
+    Ok(())
+}
+
+/// Shared visibility / sensitivity gate so the returned error matches the
+/// user's mental model (mirror of `tap_widget`'s leading checks).
+fn check_interactable(widget: &gtk::Widget, selector: Option<&str>) -> Result<(), SetValueError> {
+    if !widget.is_visible() || !widget.is_mapped() {
+        return Err(SetValueError::WidgetNotVisible {
+            selector: selector.map(str::to_string),
+        });
+    }
+    if !widget.is_sensitive() {
+        return Err(SetValueError::WidgetDisabled {
+            selector: selector.map(str::to_string),
+        });
+    }
+    Ok(())
+}
+
+/// Map a window-local coordinate to the value implied by its position along the
+/// trough, in `[lower, upper - page_size]`.
+///
+/// Best-effort: uses the range widget's full allocation (ignoring trough
+/// padding / slider size), honouring orientation and the `inverted` property.
+/// Horizontal ranges map left→lower, right→upper; vertical ranges map
+/// bottom→lower, top→upper (GTK's default), each flipped when `inverted`. For
+/// an exact value, pass `value` explicitly instead.
+pub fn value_from_coord(range: &gtk::Range, root: &gtk::Widget, xy: XY) -> f64 {
+    let adj = range.adjustment();
+    let lower = adj.lower();
+    let upper = (adj.upper() - adj.page_size()).max(lower);
+    let span = upper - lower;
+    if span <= 0.0 {
+        return lower;
+    }
+    let rect = match range.compute_bounds(root) {
+        Some(r) => r,
+        None => return lower,
+    };
+    let horizontal = range.orientation() == gtk::Orientation::Horizontal;
+    let mut frac = if horizontal {
+        if rect.width() <= 0.0 {
+            0.0
+        } else {
+            (xy.x as f32 - rect.x()) / rect.width()
+        }
+    } else if rect.height() <= 0.0 {
+        0.0
+    } else {
+        1.0 - (xy.y as f32 - rect.y()) / rect.height()
+    } as f64;
+    frac = frac.clamp(0.0, 1.0);
+    if range.is_inverted() {
+        frac = 1.0 - frac;
+    }
+    lower + frac * span
+}
+
+/// Drive a selector-resolved widget's `gtk::Range` to `value`.
+///
+/// The matched widget must itself be a `GtkRange` (selectors name the scale
+/// directly). Runs visibility / sensitivity checks, then `set_value` (which
+/// clamps to the adjustment range). Returns the clamped value actually set.
+pub fn set_value_widget(
+    widget: &gtk::Widget,
+    selector: &str,
+    value: f64,
+) -> Result<f64, SetValueError> {
+    validate_value(value)?;
+    let range =
+        widget
+            .clone()
+            .downcast::<gtk::Range>()
+            .map_err(|_| SetValueError::NoRangeForSelector {
+                selector: selector.to_string(),
+            })?;
+    check_interactable(widget, Some(selector))?;
+    range.set_value(value);
+    Ok(range.value())
+}
+
+/// Drive the `gtk::Range` under window-local `xy` to a value.
+///
+/// `value` is used directly when present; otherwise it is derived from the
+/// point's position via [`value_from_coord`]. Returns the clamped value set.
+pub fn set_value_at(
+    window: &gtk::ApplicationWindow,
+    xy: XY,
+    value: Option<f64>,
+) -> Result<f64, SetValueError> {
+    if let Some(v) = value {
+        validate_value(v)?;
+    }
+    let leaf = resolve_xy(window, xy.x, xy.y).map_err(|e| match e {
+        TapError::OutOfBounds { x, y } => SetValueError::OutOfBounds { x, y },
+        _ => SetValueError::NoRangeAtPoint { x: xy.x, y: xy.y },
+    })?;
+    let range =
+        find_range_ancestor(&leaf).ok_or(SetValueError::NoRangeAtPoint { x: xy.x, y: xy.y })?;
+    check_interactable(range.upcast_ref(), None)?;
+    let final_value = match value {
+        Some(v) => v,
+        None => {
+            let root: gtk::Widget = window.clone().upcast();
+            value_from_coord(&range, &root, xy)
+        }
+    };
+    range.set_value(final_value);
+    Ok(range.value())
 }

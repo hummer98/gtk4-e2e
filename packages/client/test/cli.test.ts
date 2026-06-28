@@ -76,6 +76,7 @@ interface RouteHandlers {
   screenshot?: (url: URL) => Response | Promise<Response>;
   swipe?: (body: unknown) => Response | Promise<Response>;
   press?: (body: unknown) => Response | Promise<Response>;
+  touchDrag?: (body: unknown) => Response | Promise<Response>;
   elements?: (url: URL) => Response | Promise<Response>;
   wait?: (body: unknown) => Response | Promise<Response>;
 }
@@ -108,6 +109,8 @@ function startMock(handlers: RouteHandlers): MockServer {
         return handlers.screenshot(url);
       if (url.pathname === "/test/swipe" && handlers.swipe) return handlers.swipe(body);
       if (url.pathname === "/test/press" && handlers.press) return handlers.press(body);
+      if (url.pathname === "/test/touch-drag" && handlers.touchDrag)
+        return handlers.touchDrag(body);
       if (url.pathname === "/test/elements" && handlers.elements) return handlers.elements(url);
       if (url.pathname === "/test/wait" && handlers.wait) return handlers.wait(body);
       return new Response("not found", { status: 404 });
@@ -411,6 +414,74 @@ describe("cli press", () => {
     const result = await runCli(["--help"]);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("press");
+  });
+});
+
+describe("cli touch-drag", () => {
+  let mock: MockServer;
+
+  afterEach(async () => {
+    await mock.stop();
+  });
+
+  test("sends {selector, hold_ms, waypoints, release} as POST /test/touch-drag body", async () => {
+    mock = startMock({ touchDrag: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli([
+      "touch-drag",
+      "#chat-input",
+      "500",
+      "--waypoints",
+      '[{"dx":0,"dy":-120}]',
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.path).toBe("/test/touch-drag");
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      selector: "#chat-input",
+      hold_ms: 500,
+      waypoints: [{ dx: 0, dy: -120 }],
+      release: true,
+    });
+  });
+
+  test("xy target + --no-release sends {xy, release:false}", async () => {
+    mock = startMock({ touchDrag: () => new Response(null, { status: 200 }) });
+
+    const result = await runCli([
+      "touch-drag",
+      "40,60",
+      "300",
+      "--no-release",
+      "--port",
+      String(mock.port),
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mock.receivedBodies.at(-1)?.body).toEqual({
+      xy: { x: 40, y: 60 },
+      hold_ms: 300,
+      waypoints: [],
+      release: false,
+    });
+  });
+
+  test("missing positional args exits 2", async () => {
+    const result = await runCli(["touch-drag", "#chat-input"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr.length).toBeGreaterThan(0);
+  });
+
+  test("malformed --waypoints exits 2", async () => {
+    const result = await runCli(["touch-drag", "#chat-input", "300", "--waypoints", "not-json"]);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain("waypoints");
+  });
+
+  test("USAGE mentions the touch-drag subcommand", async () => {
+    const result = await runCli(["--help"]);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain("touch-drag");
   });
 });
 
