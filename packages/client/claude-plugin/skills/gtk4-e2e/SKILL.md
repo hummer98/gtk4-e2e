@@ -15,7 +15,7 @@ SDK は client-side で完結し、`packages/server` (Rust) が公開する
   など、実機 GUI への自動操作を求めたとき
 - `$XDG_RUNTIME_DIR/gtk4-e2e/instance-*.json` (Linux) /
   `$TMPDIR/gtk4-e2e/instance-*.json` (macOS) から利用可能な instance を選ぶとき
-- `bunx gtk4-e2e info | tap | type | focus | swipe | pinch | screenshot | elements | wait | events | record (start|stop|status)`
+- `bunx gtk4-e2e info | tap | type | focus | swipe | pinch | press | touch-drag | key | screenshot | elements | wait | events | record (start|stop|status)`
   を呼ぶとき
 - widget の現在値 (`Entry.text` / `Switch.active` 等) を読み取って assertion
   したい / アプリの現状を把握したいとき (→ `elements --props ...`)
@@ -47,6 +47,13 @@ bunx gtk4-e2e tap "#submit"
 bunx gtk4-e2e tap 100,200
 ```
 
+座標 (xy) tap は hit-test した葉が activatable でない場合、**最寄りの
+activatable 祖先 (Switch / CheckButton / ToggleButton / Button) へ自動で
+さかのぼって発火**する (issue #12)。なので「ボタンのラベル中心」や
+`GtkStackSwitcher` の (自動生成・無名の) タブ中心を tap しても効く。
+祖先に activatable が無ければ従来どおり **422 tap_unsupported_widget**
+(葉の型名つき)。selector tap は widget 直指定なので祖先 walk しない。
+
 ### type / focus / swipe / pinch
 
 ```bash
@@ -65,6 +72,42 @@ bunx gtk4-e2e pinch 200,200 2.0
 border 等) を screenshot で決定論的に検証したいときに使う。`focus → screenshot`
 と合成する。focus を取れない widget (Label 等) は **422 focus_rejected**、
 非表示/無効は widget_not_visible / widget_disabled、未一致は 404。
+
+### press / touch-drag (保持つき入力)
+
+```bash
+# long-press: GestureLongPress を発火 (selector|x,y と hold_ms)
+bunx gtk4-e2e press "#longpress1" 600
+bunx gtk4-e2e press 80,60 600
+
+# touch-drag: 押下→保持→ドラッグ→離す を 1 つの GtkGestureDrag シーケンスで駆動。
+# 放射状 / パイメニュー (長押し → 方向に滑らせて確定) の検証用 (issue #13)。
+# waypoints は起点からの累積オフセット {dx,dy} の JSON 配列。
+bunx gtk4-e2e touch-drag "#radial-menu" 500 --waypoints '[{"dx":0,"dy":-120}]'
+bunx gtk4-e2e touch-drag 200,300 500 --waypoints '[{"dx":-80,"dy":-80},{"dx":-120,"dy":0}]'
+# --no-release: drag-end を送らず途中保持 → ハイライト state を screenshot で検証 →
+#              後続コールで離す
+bunx gtk4-e2e touch-drag "#radial-menu" 500 --waypoints '[{"dx":0,"dy":-120}]' --no-release
+```
+
+`hold_ms` (1..=10000) の間は座標を動かさず保持するので、アプリ側の長押し
+タイマ (glib timeout) が確実に閾値を超える。対象 widget か祖先に
+`GtkGestureDrag` が無ければ **404 no_draggable_***、waypoint 過多は **422
+too_many_waypoints**。GTK4 は安全 API で生のモーションイベントを合成できない
+ため、tap/swipe/pinch と同じく gesture の signal を直接駆動する方式。
+
+### key (modal popover を閉じる)
+
+```bash
+# Escape: 開いている autohide popover を popdown() で閉じる (modal の逃げ道)
+bunx gtk4-e2e key Escape
+```
+
+MVP は `Escape` のみ対応。modal/autohide な確認ダイアログ (popover) を、
+grab を壊さず安全に閉じたいときに使う。未対応キーは **422 unsupported_key**。
+
+> `set-value` (GtkRange / GtkScale を `Range::set_value` で駆動) は HTTP /
+> SDK (`client.setValue({...})`) のみで、CLI サブコマンドは未提供。
 
 ### screenshot (保存)
 
