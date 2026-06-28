@@ -40,13 +40,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::elements::ElementsError;
 use crate::input::{
-    FocusError, KeyError, PinchError, PressError, SwipeError, TapError, TypeError,
-    MAX_PRESS_HOLD_MS,
+    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError,
+    TouchDragError, TypeError, MAX_PRESS_HOLD_MS, MAX_TOUCH_DRAG_HOLD_MS, MAX_TOUCH_DRAG_WAYPOINTS,
 };
 use crate::main_thread::{MainCmd, WaitEvalError};
 use crate::proto::{
-    EventEnvelope, FocusRequest, Info, KeyRequest, PinchRequest, PressRequest, SwipeRequest,
-    TapTarget, TypeRequest, WaitRequest,
+    EventEnvelope, FocusRequest, Info, KeyRequest, PinchRequest, PressRequest, SetValueRequest,
+    SwipeRequest, TapTarget, TouchDragRequest, TypeRequest, WaitRequest,
 };
 use crate::snapshot::ScreenshotError;
 use crate::state::AppDefinedState;
@@ -75,6 +75,8 @@ pub fn router(state: AppState) -> Router {
         .route("/test/pinch", post(post_pinch))
         .route("/test/press", post(post_press))
         .route("/test/key", post(post_key))
+        .route("/test/set-value", post(post_set_value))
+        .route("/test/touch-drag", post(post_touch_drag))
         .route("/test/wait", post(post_wait))
         .route("/test/screenshot", get(get_screenshot))
         .route("/test/type", post(post_type))
@@ -385,6 +387,199 @@ fn key_error_response(e: KeyError) -> Response {
             validation_error("unsupported_key", json!({ "key": key }))
         }
         KeyError::NoActiveWindow => validation_error("no_active_window", json!({})),
+    }
+}
+
+async fn post_set_value(State(state): State<AppState>, body: String) -> Response {
+    let req: SetValueRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    // R1: pre-validate on the pure (non-GLib) path before crossing the channel.
+    // 1. Exactly one of selector / xy must be set.
+    match (&req.selector, &req.xy) {
+        (Some(_), None) | (None, Some(_)) => {}
+        _ => {
+            return validation_error(
+                "invalid_target",
+                json!({ "reason": "exactly one of selector / xy required" }),
+            );
+        }
+    }
+    // 2. Selector mode requires an explicit value (no coordinate to derive one).
+    if req.selector.is_some() && req.value.is_none() {
+        return validation_error(
+            "invalid_target",
+            json!({ "reason": "value is required when targeting by selector" }),
+        );
+    }
+    // 3. value must be finite when present.
+    if let Some(v) = req.value {
+        if !v.is_finite() {
+            return validation_error("invalid_value", json!({ "reason": "not_finite" }));
+        }
+    }
+    // 4. selector syntax (mirror of post_press): a parser error is 422
+    //    invalid_selector here rather than 404 from the dispatch fallback.
+    if let Some(selector) = &req.selector {
+        if let Err(e) = parse_selector(selector) {
+            return validation_error("invalid_selector", json!({ "reason": e.reason }));
+        }
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::SetValue {
+            selector: req.selector,
+            xy: req.xy,
+            value: req.value,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    match rx.await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => set_value_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+fn set_value_error_response(e: SetValueError) -> Response {
+    match e {
+        SetValueError::InvalidTarget { reason } => {
+            validation_error("invalid_target", json!({ "reason": reason }))
+        }
+        SetValueError::InvalidValue { reason } => {
+            validation_error("invalid_value", json!({ "reason": reason }))
+        }
+        SetValueError::OutOfBounds { x, y } => {
+            validation_error("out_of_bounds", json!({ "x": x, "y": y }))
+        }
+        SetValueError::WidgetNotVisible { selector } => match selector {
+            Some(s) => validation_error("widget_not_visible", json!({ "selector": s })),
+            None => validation_error("widget_not_visible", json!({})),
+        },
+        SetValueError::WidgetDisabled { selector } => match selector {
+            Some(s) => validation_error("widget_disabled", json!({ "selector": s })),
+            None => validation_error("widget_disabled", json!({})),
+        },
+        SetValueError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        SetValueError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        SetValueError::NoRangeAtPoint { x, y } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_range_at_point", "x": x, "y": y }),
+        ),
+        SetValueError::NoRangeForSelector { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_range_for_selector", "selector": selector }),
+        ),
+    }
+}
+async fn post_touch_drag(State(state): State<AppState>, body: String) -> Response {
+    let req: TouchDragRequest = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(_) => return bad_request("malformed_body"),
+    };
+
+    // R1: pre-validate on the pure (non-GLib) path before crossing the channel,
+    // mirroring `post_press`.
+    // 1. Exactly one of selector / xy must be set.
+    match (&req.selector, &req.xy) {
+        (Some(_), None) | (None, Some(_)) => {}
+        _ => {
+            return validation_error(
+                "invalid_target",
+                json!({ "reason": "exactly one of selector / xy required" }),
+            );
+        }
+    }
+    // 2. hold_ms bounds (zero / too_long).
+    if req.hold_ms == 0 {
+        return validation_error("invalid_hold", json!({ "reason": "zero" }));
+    }
+    if req.hold_ms > MAX_TOUCH_DRAG_HOLD_MS {
+        return validation_error(
+            "invalid_hold",
+            json!({ "reason": "too_long", "hold_ms": req.hold_ms }),
+        );
+    }
+    // 3. waypoint count bound.
+    if req.waypoints.len() > MAX_TOUCH_DRAG_WAYPOINTS {
+        return validation_error(
+            "too_many_waypoints",
+            json!({ "count": req.waypoints.len(), "max": MAX_TOUCH_DRAG_WAYPOINTS }),
+        );
+    }
+    // 4. selector syntax (mirror of post_press): a parser error is 422
+    //    invalid_selector here rather than 404 from the dispatch fallback.
+    if let Some(selector) = &req.selector {
+        if let Err(e) = parse_selector(selector) {
+            return validation_error("invalid_selector", json!({ "reason": e.reason }));
+        }
+    }
+
+    let (tx, rx) = oneshot::channel();
+    if state
+        .cmd_tx
+        .send(MainCmd::TouchDrag {
+            selector: req.selector,
+            xy: req.xy,
+            hold_ms: req.hold_ms,
+            waypoints: req.waypoints,
+            release: req.release,
+            reply: tx,
+        })
+        .await
+        .is_err()
+    {
+        return server_error("main_thread channel closed");
+    }
+    // Timer-based (hold + per-waypoint steps): like press / swipe, do NOT apply
+    // the bounded-dispatch timeout — the sequence legitimately spans up to
+    // `hold_ms` + waypoints × step.
+    match rx.await {
+        Ok(Ok(())) => StatusCode::OK.into_response(),
+        Ok(Err(e)) => touch_drag_error_response(e),
+        Err(_) => server_error("main_thread reply dropped"),
+    }
+}
+fn touch_drag_error_response(e: TouchDragError) -> Response {
+    match e {
+        TouchDragError::ZeroHold => validation_error("invalid_hold", json!({ "reason": "zero" })),
+        TouchDragError::HoldTooLong { hold_ms } => validation_error(
+            "invalid_hold",
+            json!({ "reason": "too_long", "hold_ms": hold_ms }),
+        ),
+        TouchDragError::TooManyWaypoints { count } => validation_error(
+            "too_many_waypoints",
+            json!({ "count": count, "max": MAX_TOUCH_DRAG_WAYPOINTS }),
+        ),
+        TouchDragError::OutOfBounds { x, y } => {
+            validation_error("out_of_bounds", json!({ "x": x, "y": y }))
+        }
+        TouchDragError::NoActiveWindow => validation_error("no_active_window", json!({})),
+        TouchDragError::NoDraggableAtPoint { x, y } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_draggable_at_point", "x": x, "y": y }),
+        ),
+        TouchDragError::SelectorNotFound { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "selector_not_found", "selector": selector }),
+        ),
+        TouchDragError::NoDraggableForSelector { selector } => error_response(
+            StatusCode::NOT_FOUND,
+            json!({ "error": "no_draggable_for_selector", "selector": selector }),
+        ),
+        TouchDragError::InvalidTarget { reason } => {
+            validation_error("invalid_target", json!({ "reason": reason }))
+        }
     }
 }
 

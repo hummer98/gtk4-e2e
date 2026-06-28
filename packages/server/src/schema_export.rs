@@ -14,8 +14,8 @@ use serde_json::Value;
 
 use crate::proto::{
     Bounds, Capability, ElementInfo, ElementsResponse, EventEnvelope, EventKind, FocusRequest,
-    Info, KeyRequest, PinchRequest, PressRequest, PropertyEventData, SwipeRequest, TapTarget,
-    TypeRequest, WaitCondition, WaitRequest, WaitResult,
+    Info, KeyRequest, PinchRequest, PressRequest, PropertyEventData, SetValueRequest, SwipeRequest,
+    TapTarget, TouchDragRequest, TypeRequest, WaitCondition, WaitRequest, WaitResult, Waypoint,
 };
 
 const PROVENANCE: &str = "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand";
@@ -35,6 +35,9 @@ pub fn write_schemas(out_dir: &Path) -> io::Result<()> {
     write_one::<PinchRequest>(out_dir, "PinchRequest")?;
     write_one::<PressRequest>(out_dir, "PressRequest")?;
     write_one::<KeyRequest>(out_dir, "KeyRequest")?;
+    write_one::<SetValueRequest>(out_dir, "SetValueRequest")?;
+    write_one::<Waypoint>(out_dir, "Waypoint")?;
+    write_one::<TouchDragRequest>(out_dir, "TouchDragRequest")?;
     write_one::<WaitRequest>(out_dir, "WaitRequest")?;
     write_one::<WaitCondition>(out_dir, "WaitCondition")?;
     write_one::<WaitResult>(out_dir, "WaitResult")?;

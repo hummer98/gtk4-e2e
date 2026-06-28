@@ -29,6 +29,9 @@ pub struct Info {
 /// T019 appends `State` for `GET /test/state` (app-defined state snapshot).
 /// Step 9 (c) appends `Pinch` (T015) for `POST /test/pinch`.
 /// Task 029 appends `Press` (T029) for `POST /test/press` (GestureLongPress).
+/// `Key` (issue #10) appends `POST /test/key`. `SetValue` appends
+/// `POST /test/set-value` (GtkRange / GtkScale). `TouchDrag` (issue #13) appends
+/// `POST /test/touch-drag` (held GtkGestureDrag sequence).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -45,6 +48,8 @@ pub enum Capability {
     Focus,
     Press,
     Key,
+    SetValue,
+    TouchDrag,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -86,6 +91,99 @@ pub struct TypeRequest {
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq, Eq)]
 pub struct FocusRequest {
     pub selector: String,
+}
+
+/// Body of `POST /test/set-value`.
+///
+/// Drives a `GtkRange` (GtkScale / GtkScrollbar) to a target value via
+/// `gtk::Range::set_value`, which clamps to the adjustment range and fires
+/// `value-changed` / `notify::value` for app-side observers — the same
+/// "achieve the semantic effect through the most reliable API" shortcut used by
+/// `tap` (`emit_clicked`) and `swipe` (animated adjustment), since GTK4's safe
+/// APIs cannot synthesise the click+drag a user would perform on the trough.
+///
+/// Exactly one of `selector` / `xy` selects the target widget (HTTP 422
+/// otherwise):
+///   - `selector`: resolve the `GtkRange` by `#name` / `.class`. `value` is
+///     **required** in this mode (there is no coordinate to derive it from).
+///   - `xy`: window-local pixel coordinates; the widget under the point (or its
+///     nearest `GtkRange` ancestor) is the target.
+///
+/// `value` resolution:
+///   - present: used directly (clamped server-side to the adjustment range).
+///   - absent: requires `xy` — derived from the point's position along the
+///     trough (orientation- and `inverted`-aware, best-effort).
+///
+/// `value` is rejected when non-finite (NaN / ±Inf) with HTTP 422
+/// `invalid_value`.
+///
+/// `Eq` is intentionally omitted: `Option<f64>` is not `Eq`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct SetValueRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<XY>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+}
+
+/// One waypoint of a `POST /test/touch-drag` path (issue #13).
+///
+/// `dx` / `dy` are pixel offsets **from the drag start point** (not from the
+/// previous waypoint), matching `gtk::GestureDrag`'s `drag-update` offset
+/// semantics so wedge / direction logic that reads the cumulative offset sees
+/// exactly these values. A single waypoint `{dx: 0, dy: -120}` drags 120 px up.
+///
+/// `Eq` is intentionally omitted: `f64` is not `Eq` (parity with `PinchRequest`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq)]
+pub struct Waypoint {
+    pub dx: f64,
+    pub dy: f64,
+}
+
+/// Body of `POST /test/touch-drag` (issue #13).
+///
+/// Drives a held touch sequence — press-down → hold(`hold_ms`) → drag through
+/// `waypoints` → optional release — as a **single `gtk::GestureDrag` sequence**:
+/// the server emits `drag-begin` at the start point, waits `hold_ms` of real
+/// wall-clock (so an app-side long-press timer crosses its threshold without
+/// movement), then emits `drag-update` for each waypoint, and finally
+/// `drag-end` when `release` is true. This mirrors the `tap`/`swipe`/`press`
+/// pragmatism: GTK4's safe APIs cannot synthesise raw motion events, so we drive
+/// the gesture's signals directly — the app's `connect_drag_begin` /
+/// `connect_drag_update` / `connect_drag_end` handlers see one coherent
+/// sequence.
+///
+/// Exactly one of `selector` / `xy` selects the drag origin (HTTP 422
+/// otherwise). The target widget or an ancestor must carry a `GtkGestureDrag`
+/// (or subclass); otherwise `no_draggable_*` (404).
+///
+/// `hold_ms` is bounded to 1..=10000 (`invalid_hold`). `waypoints` may be empty
+/// (a pure press-hold-release) and is capped (`too_many_waypoints`).
+///
+/// `release` defaults to `true`. `release: false` leaves the gesture mid-drag
+/// (no `drag-end`) so the highlighted / armed state can be screenshot-verified
+/// before a follow-up call releases it.
+///
+/// `Eq` is intentionally omitted: `Waypoint` carries `f64`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct TouchDragRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<XY>,
+    pub hold_ms: u64,
+    #[serde(default)]
+    pub waypoints: Vec<Waypoint>,
+    #[serde(default = "default_release")]
+    pub release: bool,
+}
+
+/// Default for `TouchDragRequest::release` — a touch-drag releases at its
+/// endpoint unless the caller opts to hold (`release: false`).
+fn default_release() -> bool {
+    true
 }
 
 /// Body of `POST /test/wait`.

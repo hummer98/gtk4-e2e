@@ -15,11 +15,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::gtk::prelude::*;
 use crate::input::{
-    focus_widget, resolve_xy, send_key, type_text, validate_press, validate_press_widget,
-    validate_tap, FocusError, KeyError, PinchError, PressError, SwipeError, TapError, TypeError,
+    focus_widget, resolve_xy, send_key, set_value_at, set_value_widget, type_text, validate_press,
+    validate_press_widget, validate_tap, validate_touch_drag, validate_touch_drag_widget,
+    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError,
+    TouchDragError, TypeError,
 };
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
-use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
+use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, Waypoint, XY};
 use crate::state::AppDefinedState;
 use crate::tree::{find_first, parse_selector, GtkTree, WidgetTree};
 
@@ -183,7 +185,18 @@ pub(crate) fn dispatch_tap(
                 }
             };
             match resolve_xy(&window, xy.x, xy.y) {
-                Ok(widget) => validate_tap(&widget, None),
+                Ok(widget) => {
+                    // issue #12: the hit-test lands on the deepest leaf, which
+                    // for a composite / labelled control is a non-activatable
+                    // content node (a Button's GtkLabel, a StackSwitcher tab's
+                    // inner GtkBox). Retarget to the nearest activatable
+                    // ancestor — mirroring real pointer-event bubbling — so xy
+                    // taps on "looks like a button" widgets fire. Fall back to
+                    // the leaf so `validate_tap` still reports UnsupportedWidget
+                    // naming the widget actually under the point.
+                    let target = crate::input::nearest_activatable(&widget).unwrap_or(widget);
+                    validate_tap(&target, None)
+                }
                 Err(e) => {
                     let _ = reply.send(Err(e));
                     return;
@@ -549,4 +562,123 @@ impl WidgetLike for crate::gtk::Widget {
         }
         Err(PropReadError::Unsupported(type_name))
     }
+}
+
+/// GTK-bound entry point for `MainCmd::SetValue`. Mirror of `dispatch_tap`:
+/// resolves the target (selector or xy), applies the value synchronously, and
+/// returns the outcome (the caller in `main_thread` forwards it on `reply`).
+///
+/// Exactly one of `selector` / `xy` is set — the HTTP layer (`post_set_value`)
+/// enforces this and pre-validates the selector / value. The mismatch arms
+/// below are defensive (`InvalidTarget`), mirroring the other dispatch helpers.
+pub(crate) fn dispatch_set_value(
+    app: &crate::gtk::Application,
+    selector: Option<String>,
+    xy: Option<XY>,
+    value: Option<f64>,
+) -> Result<(), SetValueError> {
+    match (selector, xy) {
+        (Some(selector), None) => {
+            // Selector mode requires an explicit value (no coordinate to
+            // derive one from). HTTP pre-validates this; re-check defensively.
+            let v = value.ok_or(SetValueError::InvalidTarget {
+                reason: "value is required when targeting by selector",
+            })?;
+            let sel = parse_selector(&selector).map_err(|e| SetValueError::SelectorNotFound {
+                selector: format!("{}: {}", selector, e.reason),
+            })?;
+            let tree = GtkTree { app };
+            let widget = find_first(tree, &sel).ok_or_else(|| SetValueError::SelectorNotFound {
+                selector: selector.clone(),
+            })?;
+            set_value_widget(&widget, &selector, v).map(|_| ())
+        }
+        (None, Some(xy)) => {
+            let window = app
+                .active_window()
+                .ok_or(SetValueError::NoActiveWindow)?
+                .downcast::<crate::gtk::ApplicationWindow>()
+                .map_err(|_| SetValueError::NoActiveWindow)?;
+            set_value_at(&window, xy, value).map(|_| ())
+        }
+        _ => Err(SetValueError::InvalidTarget {
+            reason: "exactly one of selector / xy required",
+        }),
+    }
+}
+
+/// GTK-bound entry point for `MainCmd::TouchDrag` (issue #13). Mirror of
+/// `dispatch_press`: resolves the target (selector or xy), validates, then
+/// either replies with the validation error or schedules the held-drag sequence
+/// and replies with `Ok(())` from its completion callback.
+///
+/// Exactly one of `selector` / `xy` is set — the HTTP layer (`post_touch_drag`)
+/// enforces this and pre-validates the selector. The mismatch arm is defensive
+/// (`InvalidTarget`), mirroring the other dispatch helpers.
+#[allow(clippy::too_many_arguments)] // mirrors the MainCmd::TouchDrag payload fields 1:1.
+pub(crate) fn dispatch_touch_drag(
+    app: &crate::gtk::Application,
+    selector: Option<String>,
+    xy: Option<XY>,
+    hold_ms: u64,
+    waypoints: Vec<Waypoint>,
+    release: bool,
+    reply: tokio::sync::oneshot::Sender<Result<(), TouchDragError>>,
+) {
+    let window = match app
+        .active_window()
+        .and_then(|w| w.downcast::<crate::gtk::ApplicationWindow>().ok())
+    {
+        Some(w) => w,
+        None => {
+            let _ = reply.send(Err(TouchDragError::NoActiveWindow));
+            return;
+        }
+    };
+
+    // Waypoints are cumulative (from-start) offsets — pass them straight through
+    // to `GestureDrag`'s offset-based `drag-update`.
+    let offsets: Vec<(f64, f64)> = waypoints.iter().map(|w| (w.dx, w.dy)).collect();
+
+    let anim = match (selector, xy) {
+        (Some(selector), None) => {
+            let sel = match parse_selector(&selector) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = reply.send(Err(TouchDragError::SelectorNotFound {
+                        selector: format!("{selector}: {}", e.reason),
+                    }));
+                    return;
+                }
+            };
+            let tree = GtkTree { app };
+            let widget = match find_first(tree, &sel) {
+                Some(w) => w,
+                None => {
+                    let _ = reply.send(Err(TouchDragError::SelectorNotFound { selector }));
+                    return;
+                }
+            };
+            validate_touch_drag_widget(&widget, &selector, hold_ms, offsets, release)
+        }
+        (None, Some(center)) => validate_touch_drag(&window, center, hold_ms, offsets, release),
+        _ => {
+            let _ = reply.send(Err(TouchDragError::InvalidTarget {
+                reason: "exactly one of selector / xy required",
+            }));
+            return;
+        }
+    };
+
+    let anim = match anim {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    };
+
+    anim.run(move || {
+        let _ = reply.send(Ok(()));
+    });
 }
