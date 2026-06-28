@@ -23,9 +23,12 @@ use tokio::sync::oneshot;
 
 use crate::elements::ElementsError;
 use crate::input::{
-    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError, TypeError,
+    FocusError, KeyError, PinchError, PressError, SetValueError, SwipeError, TapError,
+    TouchDragError, TypeError,
 };
-use crate::proto::{ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, XY};
+use crate::proto::{
+    ElementsResponse, FocusRequest, TapTarget, TypeRequest, WaitCondition, Waypoint, XY,
+};
 use crate::snapshot::ScreenshotError;
 
 /// Result of evaluating a `WaitCondition` for one tick.
@@ -135,6 +138,18 @@ pub enum MainCmd {
     Key {
         key: String,
         reply: oneshot::Sender<Result<bool, KeyError>>,
+    },
+    /// Drive a held touch-drag (press-hold → drag → release) as a single
+    /// `GtkGestureDrag` sequence (issue #13). Exactly one of `selector` / `xy`
+    /// is set (HTTP layer enforces this). Replies on the sequence's completion,
+    /// mirroring `Press` / `Swipe`.
+    TouchDrag {
+        selector: Option<String>,
+        xy: Option<XY>,
+        hold_ms: u64,
+        waypoints: Vec<Waypoint>,
+        release: bool,
+        reply: oneshot::Sender<Result<(), TouchDragError>>,
     },
 }
 
@@ -296,6 +311,28 @@ fn handle_cmd(cmd: MainCmd) {
             let outcome = with_app(|app| crate::wait::dispatch_key(app, &key))
                 .unwrap_or(Err(KeyError::NoActiveWindow));
             let _ = reply.send(outcome);
+        }
+        MainCmd::TouchDrag {
+            selector,
+            xy,
+            hold_ms,
+            waypoints,
+            release,
+            reply,
+        } => {
+            // Same APP.with-direct-borrow trick as Swipe / Pinch / Press so the
+            // `Some/None` arms can each consume `reply` without borrow-checker
+            // contortions inside a `with_app` closure.
+            APP.with(|slot| match slot.borrow().as_ref() {
+                Some(app) => {
+                    crate::wait::dispatch_touch_drag(
+                        app, selector, xy, hold_ms, waypoints, release, reply,
+                    );
+                }
+                None => {
+                    let _ = reply.send(Err(TouchDragError::NoActiveWindow));
+                }
+            });
         }
     }
 }

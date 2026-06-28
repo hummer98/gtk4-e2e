@@ -45,6 +45,7 @@ fn make_state() -> (AppState, tokio::sync::mpsc::Sender<MainCmd>) {
             Capability::Press,
             Capability::SetValue,
             Capability::Key,
+            Capability::TouchDrag,
         ],
         token_required: None,
     });
@@ -920,8 +921,9 @@ async fn type_capability_in_info() {
             "press",
             "set_value",
             "key",
+            "touch_drag",
         ],
-        "capabilities order must include type, swipe, elements, state, pinch, focus, press, set_value, and key at the tail"
+        "capabilities order must include type, swipe, elements, state, pinch, focus, press, set_value, key, and touch_drag at the tail"
     );
 }
 
@@ -2849,6 +2851,255 @@ async fn tap_xy_no_activatable_ancestor_422() {
     assert_eq!(
         v.get("widget_type").and_then(Value::as_str),
         Some("GtkLabel")
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+// ----- touch-drag (issue #13) -----
+
+#[tokio::test]
+async fn touch_drag_malformed_body_400() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/touch-drag")
+                .header("content-type", "application/json")
+                .body(Body::from("not json"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("bad_request"));
+}
+
+#[tokio::test]
+async fn touch_drag_missing_target_422() {
+    // R1: neither selector nor xy provided is 422 invalid_target (pure path).
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "hold_ms": 300 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/touch-drag")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("invalid_target")
+    );
+}
+
+#[tokio::test]
+async fn touch_drag_zero_hold_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let body = json!({ "selector": "#d", "hold_ms": 0 });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/touch-drag")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(v.get("error").and_then(Value::as_str), Some("invalid_hold"));
+    assert_eq!(v.get("reason").and_then(Value::as_str), Some("zero"));
+}
+
+#[tokio::test]
+async fn touch_drag_too_many_waypoints_422() {
+    let (state, _tx) = make_state();
+    let app = router(state);
+    let waypoints: Vec<Value> = (0..65).map(|i| json!({ "dx": i, "dy": 0 })).collect();
+    let body = json!({ "selector": "#d", "hold_ms": 100, "waypoints": waypoints });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/touch-drag")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("too_many_waypoints")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn touch_drag_endpoint_fires_sequence_200() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-touchdrag-ok")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    let area = gtk::DrawingArea::builder()
+        .content_width(160)
+        .content_height(120)
+        .build();
+    area.set_widget_name("dragarea");
+    let drag = gtk::GestureDrag::new();
+
+    let began = std::rc::Rc::new(std::cell::Cell::new(false));
+    let updates = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let ended = std::rc::Rc::new(std::cell::Cell::new(false));
+    let end_off = std::rc::Rc::new(std::cell::Cell::new((0.0f64, 0.0f64)));
+    {
+        let began = began.clone();
+        drag.connect_drag_begin(move |_g, _x, _y| began.set(true));
+    }
+    {
+        let updates = updates.clone();
+        drag.connect_drag_update(move |_g, _ox, _oy| updates.set(updates.get() + 1));
+    }
+    {
+        let ended = ended.clone();
+        let end_off = end_off.clone();
+        drag.connect_drag_end(move |_g, ox, oy| {
+            ended.set(true);
+            end_off.set((ox, oy));
+        });
+    }
+    area.add_controller(drag);
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&area)
+        .default_width(360)
+        .default_height(480)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({
+        "selector": "#dragarea",
+        "hold_ms": 30,
+        "waypoints": [{ "dx": 0, "dy": -40 }],
+        "release": true,
+    });
+    let req = Request::builder()
+        .method("POST")
+        .uri("/test/touch-drag")
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+
+    // Timer-based: race the request against a real-time GLib pump (mirror of
+    // `press_endpoint_returns_200`).
+    let resp = tokio::select! {
+        r = app.oneshot(req) => r.unwrap(),
+        _ = async {
+            for _ in 0..400 {
+                for _ in 0..16 {
+                    if !gtk::glib::MainContext::default().iteration(false) {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        } => panic!("pump finished before request returned"),
+    };
+    assert_eq!(resp.status(), StatusCode::OK);
+    common::pump_glib(64);
+
+    assert!(began.get(), "drag-begin should have fired");
+    assert!(
+        updates.get() >= 1,
+        "drag-update should have fired at least once"
+    );
+    assert!(ended.get(), "drag-end should have fired (release=true)");
+    assert_eq!(
+        end_off.get(),
+        (0.0, -40.0),
+        "drag-end offset should match the last waypoint"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn touch_drag_no_draggable_for_selector_404() {
+    if !require_display() {
+        return;
+    }
+    let (mut state, _tx) = make_state();
+    let app_gtk = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.routetest-touchdrag-404")
+        .build();
+    let _ = app_gtk.register(None::<&gtk::gio::Cancellable>);
+
+    // A plain Box with no GestureDrag attached anywhere up the chain.
+    let plain = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .build();
+    plain.set_widget_name("plainbox");
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app_gtk)
+        .child(&plain)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    install_app(app_gtk);
+
+    let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<MainCmd>(8);
+    spawn_receiver_loop(cmd_rx);
+    state.cmd_tx = cmd_tx;
+
+    let app = router(state);
+    let body = json!({ "selector": "#plainbox", "hold_ms": 50, "waypoints": [] });
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/test/touch-drag")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    common::pump_glib(64);
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let v = body_json(resp).await;
+    assert_eq!(
+        v.get("error").and_then(Value::as_str),
+        Some("no_draggable_for_selector")
     );
 
     window.close();

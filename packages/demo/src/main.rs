@@ -8,8 +8,8 @@ use std::rc::Rc;
 use gtk4::prelude::*;
 use gtk4::{
     Align, Application, ApplicationWindow, Box as GtkBox, Button, CheckButton, DrawingArea, Entry,
-    GestureLongPress, GestureZoom, Label, ListBox, Orientation, Popover, Scale, ScrolledWindow,
-    Stack, StackSwitcher, Switch, ToggleButton,
+    GestureDrag, GestureLongPress, GestureZoom, Label, ListBox, Orientation, Popover, Scale,
+    ScrolledWindow, Stack, StackSwitcher, Switch, ToggleButton,
 };
 #[cfg(feature = "e2e")]
 use serde_json::{json, Value};
@@ -340,6 +340,68 @@ fn build_ui(
     }
     longpress_area.add_controller(longpress_gesture);
 
+    // touch-drag capability (issue #13): a DrawingArea with a GtkGestureDrag,
+    // standing in for a radial / pie menu. `POST /test/touch-drag` drives the
+    // gesture's `drag-begin` → `drag-update`×N → `drag-end` as one sequence.
+    // Handlers record the phase + last cumulative offset into app-state so
+    // scenarios can `wait { app_state_eq, path = "/touchdrag1/phase",
+    // value = "end" }` and assert the release direction via
+    // `/touchdrag1/offset_{x,y}`.
+    let touchdrag_area = DrawingArea::builder()
+        .content_width(160)
+        .content_height(120)
+        .hexpand(false)
+        .vexpand(false)
+        .build();
+    touchdrag_area.set_widget_name("touchdrag1");
+
+    let drag_gesture = GestureDrag::new();
+    #[cfg(feature = "e2e")]
+    {
+        let server_slot = server_slot.clone();
+        let demo_state = demo_state.clone();
+        drag_gesture.connect_drag_begin(move |_g, x, y| {
+            set_at(&demo_state, "/touchdrag1/phase", json!("begin"));
+            set_at(&demo_state, "/touchdrag1/start_x", json!(x));
+            set_at(&demo_state, "/touchdrag1/start_y", json!(y));
+            set_at(&demo_state, "/touchdrag1/update_count", json!(0));
+            push_state(&server_slot, &demo_state);
+        });
+    }
+    #[cfg(feature = "e2e")]
+    {
+        let server_slot = server_slot.clone();
+        let demo_state = demo_state.clone();
+        let update_count: Rc<RefCell<u64>> = Rc::new(RefCell::new(0));
+        drag_gesture.connect_drag_update(move |_g, ox, oy| {
+            {
+                let mut c = update_count.borrow_mut();
+                *c += 1;
+            }
+            set_at(&demo_state, "/touchdrag1/phase", json!("update"));
+            set_at(&demo_state, "/touchdrag1/offset_x", json!(ox));
+            set_at(&demo_state, "/touchdrag1/offset_y", json!(oy));
+            set_at(
+                &demo_state,
+                "/touchdrag1/update_count",
+                json!(*update_count.borrow()),
+            );
+            push_state(&server_slot, &demo_state);
+        });
+    }
+    #[cfg(feature = "e2e")]
+    {
+        let server_slot = server_slot.clone();
+        let demo_state = demo_state.clone();
+        drag_gesture.connect_drag_end(move |_g, ox, oy| {
+            set_at(&demo_state, "/touchdrag1/phase", json!("end"));
+            set_at(&demo_state, "/touchdrag1/offset_x", json!(ox));
+            set_at(&demo_state, "/touchdrag1/offset_y", json!(oy));
+            push_state(&server_slot, &demo_state);
+        });
+    }
+    touchdrag_area.add_controller(drag_gesture);
+
     // set-value capability: a horizontal GtkScale (0..100) so `POST
     // /test/set-value` has a GtkRange to drive. `connect_value_changed` mirrors
     // the current value into `#scale-pos` (for `state_eq` assertions) and into
@@ -425,6 +487,7 @@ fn build_ui(
     vbox.append(&drawing_area);
     vbox.append(&zoom_pos);
     vbox.append(&longpress_area);
+    vbox.append(&touchdrag_area);
     vbox.append(&scale1);
     vbox.append(&scale_pos);
     vbox.append(&open_dialog_button);

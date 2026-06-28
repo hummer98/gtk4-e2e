@@ -31,6 +31,8 @@ pub struct Info {
 /// Task 029 appends `Press` (T029) for `POST /test/press` (GestureLongPress).
 /// `SetValue` appends support for `POST /test/set-value` (GtkRange / GtkScale).
 /// `Key` (issue #10) appends support for `POST /test/key` (Escape → popdown).
+/// `TouchDrag` (issue #13) appends `POST /test/touch-drag` (press-hold → drag →
+/// release as a single GtkGestureDrag sequence).
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
@@ -48,6 +50,7 @@ pub enum Capability {
     Press,
     SetValue,
     Key,
+    TouchDrag,
 }
 
 /// Window-local pixel coordinates (top-left origin).
@@ -186,6 +189,64 @@ pub struct SetValueRequest {
     pub xy: Option<XY>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<f64>,
+}
+
+/// One waypoint of a `POST /test/touch-drag` path (issue #13).
+///
+/// `dx` / `dy` are pixel offsets **from the drag start point** (not from the
+/// previous waypoint), matching `gtk::GestureDrag`'s `drag-update` offset
+/// semantics so wedge / direction logic that reads the cumulative offset sees
+/// exactly these values. A single waypoint `{dx: 0, dy: -120}` drags 120 px up.
+///
+/// `Eq` is intentionally omitted: `f64` is not `Eq` (parity with `PinchRequest`).
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq)]
+pub struct Waypoint {
+    pub dx: f64,
+    pub dy: f64,
+}
+
+/// Body of `POST /test/touch-drag` (issue #13).
+///
+/// Drives a held touch sequence — press-down → hold(`hold_ms`) → drag through
+/// `waypoints` → optional release — as a **single `gtk::GestureDrag` sequence**:
+/// the server emits `drag-begin` at the start point, waits `hold_ms` of real
+/// wall-clock (so an app-side long-press timer crosses its threshold without
+/// movement), then emits `drag-update` for each waypoint, and finally
+/// `drag-end` when `release` is true. This mirrors the `tap`/`swipe`/`press`
+/// pragmatism: GTK4's safe APIs cannot synthesise raw motion events, so we drive
+/// the gesture's signals directly — the app's `connect_drag_begin` /
+/// `connect_drag_update` / `connect_drag_end` handlers see one coherent
+/// sequence.
+///
+/// Exactly one of `selector` / `xy` selects the drag origin (HTTP 422
+/// otherwise). The target widget or an ancestor must carry a `GtkGestureDrag`
+/// (or subclass); otherwise `no_draggable_*` (404).
+///
+/// `hold_ms` is bounded to 1..=10000 (`invalid_hold`). `waypoints` may be empty
+/// (a pure press-hold-release) and is capped (`too_many_waypoints`).
+///
+/// `release` defaults to `true`. `release: false` leaves the gesture mid-drag
+/// (no `drag-end`) so the highlighted / armed state can be screenshot-verified
+/// before a follow-up call releases it.
+///
+/// `Eq` is intentionally omitted: `Waypoint` carries `f64`.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, PartialEq)]
+pub struct TouchDragRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xy: Option<XY>,
+    pub hold_ms: u64,
+    #[serde(default)]
+    pub waypoints: Vec<Waypoint>,
+    #[serde(default = "default_release")]
+    pub release: bool,
+}
+
+/// Default for `TouchDragRequest::release` — a touch-drag releases at its
+/// endpoint unless the caller opts to hold (`release: false`).
+fn default_release() -> bool {
+    true
 }
 
 /// Body of `POST /test/key` (issue #10).

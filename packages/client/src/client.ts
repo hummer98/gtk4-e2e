@@ -32,9 +32,11 @@ import type {
   PressRequest,
   SetValueRequest,
   TapTarget,
+  TouchDragRequest,
   TypeRequest,
   WaitCondition,
   WaitResult,
+  Waypoint,
 } from "./types.gen.ts";
 import {
   type ExpectScreenshotOptions,
@@ -280,6 +282,53 @@ export class E2EClient {
       path: "/test/press",
       body,
       capability: "press",
+      expect: "void",
+    });
+  }
+
+  /**
+   * Drive a held touch-drag — press-down → hold(`hold_ms`) → drag through
+   * `waypoints` → optional release — as a single `GtkGestureDrag` sequence
+   * (issue #13). Built for custom radial / pie menus where a single
+   * `tap` / `swipe` / `press` cannot express `begin → hold → update×N → end`.
+   *
+   * Exactly one of `selector` / `xy` sets the drag origin. The target widget or
+   * an ancestor must carry a `GtkGestureDrag` (or subclass). `waypoints` are
+   * pixel offsets **from the start point** (cumulative `GestureDrag` offsets);
+   * `{ dx: 0, dy: -120 }` drags 120px up. `holdMs` (1..=10000) is held without
+   * movement before the first waypoint so an app-side long-press timer fires.
+   *
+   * `release` (default `true`) emits `drag-end` at the final offset. Pass
+   * `false` to leave the gesture mid-drag so the highlighted state can be
+   * screenshot-verified, then release with a follow-up call.
+   *
+   * Resolves once the sequence has been emitted server-side.
+   *
+   * Errors:
+   *   - 404 selector_not_found / no_draggable_at_point / no_draggable_for_selector
+   *   - 422 invalid_target / invalid_hold / too_many_waypoints /
+   *         invalid_selector / out_of_bounds / no_active_window
+   *   - 501 NotImplementedError if the capability is missing on the server
+   */
+  async touchDrag(opts: {
+    selector?: string;
+    xy?: { x: number; y: number };
+    holdMs: number;
+    waypoints?: Waypoint[];
+    release?: boolean;
+  }): Promise<void> {
+    const body: TouchDragRequest = {
+      selector: opts.selector,
+      xy: opts.xy,
+      hold_ms: opts.holdMs,
+      waypoints: opts.waypoints ?? [],
+      release: opts.release ?? true,
+    };
+    await this._request<void>({
+      method: "POST",
+      path: "/test/touch-drag",
+      body,
+      capability: "touch_drag",
       expect: "void",
     });
   }

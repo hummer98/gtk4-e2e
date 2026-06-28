@@ -1121,6 +1121,307 @@ pub fn find_long_press_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::Ges
 }
 
 // ---------------------------------------------------------------------------
+// Touch-drag (issue #13) — held GtkGestureDrag sequence
+//
+// Drives a press-hold → drag → release as a single `gtk::GestureDrag` sequence
+// by emitting `drag-begin` / `drag-update` / `drag-end` directly, with a real
+// `hold_ms` wall-clock pause before the first move so an app-side long-press
+// timer crosses its threshold. Same pragmatism as press/pinch/swipe: GTK4-rs
+// cannot synthesise raw motion events, so we drive the gesture's signals.
+// ---------------------------------------------------------------------------
+
+/// Domain errors surfaced by the touch-drag pipeline (issue #13).
+///
+/// Mapped to HTTP status codes in `http.rs`:
+///
+/// | error                       | http |
+/// |-----------------------------|------|
+/// | `ZeroHold`                  | 422  |
+/// | `HoldTooLong`               | 422  |
+/// | `TooManyWaypoints`          | 422  |
+/// | `OutOfBounds`               | 422  |
+/// | `NoActiveWindow`            | 422  |
+/// | `InvalidTarget`             | 422  |
+/// | `NoDraggableAtPoint`        | 404  |
+/// | `SelectorNotFound`          | 404  |
+/// | `NoDraggableForSelector`    | 404  |
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TouchDragError {
+    ZeroHold,
+    HoldTooLong { hold_ms: u64 },
+    TooManyWaypoints { count: usize },
+    OutOfBounds { x: i32, y: i32 },
+    NoActiveWindow,
+    NoDraggableAtPoint { x: i32, y: i32 },
+    SelectorNotFound { selector: String },
+    NoDraggableForSelector { selector: String },
+    InvalidTarget { reason: &'static str },
+}
+
+impl std::fmt::Display for TouchDragError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TouchDragError::ZeroHold => write!(f, "invalid_hold: zero"),
+            TouchDragError::HoldTooLong { hold_ms } => {
+                write!(f, "invalid_hold: too_long ({hold_ms} ms)")
+            }
+            TouchDragError::TooManyWaypoints { count } => {
+                write!(f, "too_many_waypoints: {count}")
+            }
+            TouchDragError::OutOfBounds { x, y } => write!(f, "out_of_bounds: ({x}, {y})"),
+            TouchDragError::NoActiveWindow => write!(f, "no_active_window"),
+            TouchDragError::NoDraggableAtPoint { x, y } => {
+                write!(f, "no_draggable_at_point: ({x}, {y})")
+            }
+            TouchDragError::SelectorNotFound { selector } => {
+                write!(f, "selector_not_found: {selector}")
+            }
+            TouchDragError::NoDraggableForSelector { selector } => {
+                write!(f, "no_draggable_for_selector: {selector}")
+            }
+            TouchDragError::InvalidTarget { reason } => write!(f, "invalid_target: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for TouchDragError {}
+
+/// Upper bound on `hold_ms` — shared with the press semantics (a hold beyond
+/// 10 s in a test is almost certainly a mistake).
+pub const MAX_TOUCH_DRAG_HOLD_MS: u64 = 10_000;
+
+/// Upper bound on the number of waypoints in one touch-drag. Bounds the timer
+/// work scheduled on the GLib thread; a real radial-menu drag needs only a
+/// handful of waypoints.
+pub const MAX_TOUCH_DRAG_WAYPOINTS: usize = 64;
+
+/// Interval between successive `drag-update` emits (and the final `drag-end`).
+/// One ~60 fps frame, mirroring `SwipeAnimation`'s per-frame cadence.
+const TOUCH_DRAG_STEP_MS: u64 = 16;
+
+/// One scheduled step after the hold elapses.
+enum TouchDragEvent {
+    Update(f64, f64),
+    End(f64, f64),
+}
+
+/// Plan output from the `validate_touch_drag*` helpers: the resolved
+/// `GestureDrag`, the start point, the hold delay, the cumulative offsets to
+/// pass through, and whether to release at the end. Pure (no timer scheduled,
+/// no widget mutation) so the HTTP layer can inspect validation outcomes before
+/// crossing onto the GLib thread.
+pub struct TouchDragAnimation {
+    gesture: gtk::GestureDrag,
+    start_x: f64,
+    start_y: f64,
+    hold_ms: u64,
+    /// Cumulative (from-start) offsets, one per waypoint, in order.
+    offsets: Vec<(f64, f64)>,
+    release: bool,
+}
+
+impl TouchDragAnimation {
+    /// Emit `drag-begin` immediately (the finger-down), then after `hold_ms` of
+    /// real wall-clock drain the waypoints as `drag-update` emits at
+    /// `TOUCH_DRAG_STEP_MS` cadence, and finally `drag-end` when `release`.
+    /// `on_complete` fires once the last event has been emitted. Must be called
+    /// on the GLib main thread.
+    ///
+    /// `drag-begin(start_x, start_y)` / `drag-update(offset_x, offset_y)` /
+    /// `drag-end(offset_x, offset_y)` are `gtk::GestureDrag`'s signal
+    /// signatures; the `emit_by_name` turbofish is `<()>` because they return
+    /// void (mirror of `LongPressAnimation` / `PinchAnimation`).
+    pub fn run<F: FnOnce() + 'static>(self, on_complete: F) {
+        let TouchDragAnimation {
+            gesture,
+            start_x,
+            start_y,
+            hold_ms,
+            offsets,
+            release,
+        } = self;
+
+        gesture.emit_by_name::<()>("drag-begin", &[&start_x, &start_y]);
+
+        // Post-hold event queue: each waypoint as an update, then the end (at
+        // the last offset, or the origin if there were no waypoints) on release.
+        let mut events: std::collections::VecDeque<TouchDragEvent> = offsets
+            .iter()
+            .map(|&(ox, oy)| TouchDragEvent::Update(ox, oy))
+            .collect();
+        if release {
+            let (eox, eoy) = offsets.last().copied().unwrap_or((0.0, 0.0));
+            events.push_back(TouchDragEvent::End(eox, eoy));
+        }
+
+        // Hold for `hold_ms` (no movement), then step through the queue. A
+        // one-shot for the hold, then a periodic drain — keeps the begin→first
+        // move gap ≥ hold_ms so an app long-press timer fires.
+        let mut on_complete_slot = Some(on_complete);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(hold_ms), move || {
+            if events.is_empty() {
+                if let Some(cb) = on_complete_slot.take() {
+                    cb();
+                }
+                return;
+            }
+            let events = std::cell::RefCell::new(events);
+            glib::timeout_add_local(
+                std::time::Duration::from_millis(TOUCH_DRAG_STEP_MS),
+                move || match events.borrow_mut().pop_front() {
+                    Some(TouchDragEvent::Update(ox, oy)) => {
+                        gesture.emit_by_name::<()>("drag-update", &[&ox, &oy]);
+                        glib::ControlFlow::Continue
+                    }
+                    Some(TouchDragEvent::End(ox, oy)) => {
+                        gesture.emit_by_name::<()>("drag-end", &[&ox, &oy]);
+                        glib::ControlFlow::Continue
+                    }
+                    None => {
+                        if let Some(cb) = on_complete_slot.take() {
+                            cb();
+                        }
+                        glib::ControlFlow::Break
+                    }
+                },
+            );
+        });
+    }
+}
+
+/// Validate the shared touch-drag parameters (`hold_ms`, waypoint count).
+fn validate_touch_drag_params(hold_ms: u64, waypoint_count: usize) -> Result<(), TouchDragError> {
+    if hold_ms == 0 {
+        return Err(TouchDragError::ZeroHold);
+    }
+    if hold_ms > MAX_TOUCH_DRAG_HOLD_MS {
+        return Err(TouchDragError::HoldTooLong { hold_ms });
+    }
+    if waypoint_count > MAX_TOUCH_DRAG_WAYPOINTS {
+        return Err(TouchDragError::TooManyWaypoints {
+            count: waypoint_count,
+        });
+    }
+    Ok(())
+}
+
+/// Validate an xy-targeted touch-drag and prepare a [`TouchDragAnimation`].
+///
+/// Pure. Order: param validation → window bounds (with `default_size` fallback
+/// for pre-mapped quartz, mirror of `validate_press`) → xy leaf resolution →
+/// ancestor walk for `GestureDrag`. The start point is the requested `center`.
+pub fn validate_touch_drag(
+    window: &gtk::ApplicationWindow,
+    center: XY,
+    hold_ms: u64,
+    offsets: Vec<(f64, f64)>,
+    release: bool,
+) -> Result<TouchDragAnimation, TouchDragError> {
+    validate_touch_drag_params(hold_ms, offsets.len())?;
+
+    let alloc = window.allocation();
+    let (mut w, mut h) = (alloc.width(), alloc.height());
+    if w <= 0 || h <= 0 {
+        let (dw, dh) = window.default_size();
+        if dw > 0 {
+            w = dw;
+        }
+        if dh > 0 {
+            h = dh;
+        }
+    }
+    if center.x < 0 || center.y < 0 || center.x >= w || center.y >= h {
+        return Err(TouchDragError::OutOfBounds {
+            x: center.x,
+            y: center.y,
+        });
+    }
+
+    let leaf = match resolve_xy(window, center.x, center.y) {
+        Ok(w) => w,
+        Err(TapError::OutOfBounds { x, y }) => return Err(TouchDragError::OutOfBounds { x, y }),
+        Err(_) => {
+            return Err(TouchDragError::NoDraggableAtPoint {
+                x: center.x,
+                y: center.y,
+            });
+        }
+    };
+
+    let gesture = find_drag_gesture_ancestor(&leaf).ok_or(TouchDragError::NoDraggableAtPoint {
+        x: center.x,
+        y: center.y,
+    })?;
+
+    Ok(TouchDragAnimation {
+        gesture,
+        start_x: center.x as f64,
+        start_y: center.y as f64,
+        hold_ms,
+        offsets,
+        release,
+    })
+}
+
+/// Validate a selector-targeted touch-drag against an already-resolved `widget`
+/// and prepare a [`TouchDragAnimation`].
+///
+/// Pure. The `GestureDrag` is searched on the widget or an ancestor (not found
+/// ⇒ `NoDraggableForSelector`). The start point is the widget centre via
+/// `widget.compute_bounds(widget)` (mirror of `validate_press_widget`).
+pub fn validate_touch_drag_widget(
+    widget: &gtk::Widget,
+    selector: &str,
+    hold_ms: u64,
+    offsets: Vec<(f64, f64)>,
+    release: bool,
+) -> Result<TouchDragAnimation, TouchDragError> {
+    validate_touch_drag_params(hold_ms, offsets.len())?;
+
+    let gesture = find_drag_gesture_ancestor(widget).ok_or_else(|| {
+        TouchDragError::NoDraggableForSelector {
+            selector: selector.to_string(),
+        }
+    })?;
+
+    let (start_x, start_y) = widget
+        .compute_bounds(widget)
+        .map(|r| ((r.width() / 2.0) as f64, (r.height() / 2.0) as f64))
+        .unwrap_or((0.0, 0.0));
+
+    Ok(TouchDragAnimation {
+        gesture,
+        start_x,
+        start_y,
+        hold_ms,
+        offsets,
+        release,
+    })
+}
+
+/// Walk parents from `widget` looking for an attached `gtk::GestureDrag` (or a
+/// subclass — a custom radial-menu gesture typically extends `GestureDrag`).
+/// Returns the gesture so the caller can drive it without a second walk. Mirror
+/// of [`find_long_press_gesture_ancestor`].
+pub fn find_drag_gesture_ancestor(widget: &gtk::Widget) -> Option<gtk::GestureDrag> {
+    let mut cur = Some(widget.clone());
+    while let Some(w) = cur {
+        let parent = w.parent();
+        let controllers = w.observe_controllers();
+        let n = controllers.n_items();
+        for i in 0..n {
+            if let Some(item) = controllers.item(i) {
+                if let Ok(drag) = item.downcast::<gtk::GestureDrag>() {
+                    return Some(drag);
+                }
+            }
+        }
+        cur = parent;
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // set-value (GtkRange / GtkScale)
 //
 // MVP supports any `gtk::Range` (GtkScale, GtkScrollbar) via

@@ -16,11 +16,12 @@ use tokio::sync::{mpsc, oneshot};
 use crate::gtk::prelude::*;
 use crate::input::{
     focus_widget, resolve_xy, set_value_at, set_value_widget, tap_widget, type_text,
-    validate_press, validate_press_widget, FocusError, PinchError, PressError, SetValueError,
-    SwipeError, TapError, TypeError,
+    validate_press, validate_press_widget, validate_touch_drag, validate_touch_drag_widget,
+    FocusError, PinchError, PressError, SetValueError, SwipeError, TapError, TouchDragError,
+    TypeError,
 };
 use crate::main_thread::{MainCmd, WaitEvalError, WaitTickOutcome, WaitTickResult};
-use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, XY};
+use crate::proto::{FocusRequest, TapTarget, TypeRequest, WaitCondition, WaitResult, Waypoint, XY};
 use crate::state::AppDefinedState;
 use crate::tree::{find_first, parse_selector, GtkTree, WidgetTree};
 
@@ -364,6 +365,82 @@ pub(crate) fn dispatch_press(
             // Both or neither target set — should be unreachable past the
             // HTTP pre-validation, but reply defensively rather than panic.
             let _ = reply.send(Err(PressError::InvalidTarget {
+                reason: "exactly one of selector / xy required",
+            }));
+            return;
+        }
+    };
+
+    let anim = match anim {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    };
+
+    anim.run(move || {
+        let _ = reply.send(Ok(()));
+    });
+}
+
+/// GTK-bound entry point for `MainCmd::TouchDrag` (issue #13). Mirror of
+/// `dispatch_press`: resolves the target (selector or xy), validates, then
+/// either replies with the validation error or schedules the held-drag sequence
+/// and replies with `Ok(())` from its completion callback.
+///
+/// Exactly one of `selector` / `xy` is set — the HTTP layer (`post_touch_drag`)
+/// enforces this and pre-validates the selector. The mismatch arm is defensive
+/// (`InvalidTarget`), mirroring the other dispatch helpers.
+#[allow(clippy::too_many_arguments)] // mirrors the MainCmd::TouchDrag payload fields 1:1.
+pub(crate) fn dispatch_touch_drag(
+    app: &crate::gtk::Application,
+    selector: Option<String>,
+    xy: Option<XY>,
+    hold_ms: u64,
+    waypoints: Vec<Waypoint>,
+    release: bool,
+    reply: tokio::sync::oneshot::Sender<Result<(), TouchDragError>>,
+) {
+    let window = match app
+        .active_window()
+        .and_then(|w| w.downcast::<crate::gtk::ApplicationWindow>().ok())
+    {
+        Some(w) => w,
+        None => {
+            let _ = reply.send(Err(TouchDragError::NoActiveWindow));
+            return;
+        }
+    };
+
+    // Waypoints are cumulative (from-start) offsets — pass them straight through
+    // to `GestureDrag`'s offset-based `drag-update`.
+    let offsets: Vec<(f64, f64)> = waypoints.iter().map(|w| (w.dx, w.dy)).collect();
+
+    let anim = match (selector, xy) {
+        (Some(selector), None) => {
+            let sel = match parse_selector(&selector) {
+                Ok(s) => s,
+                Err(e) => {
+                    let _ = reply.send(Err(TouchDragError::SelectorNotFound {
+                        selector: format!("{selector}: {}", e.reason),
+                    }));
+                    return;
+                }
+            };
+            let tree = GtkTree { app };
+            let widget = match find_first(tree, &sel) {
+                Some(w) => w,
+                None => {
+                    let _ = reply.send(Err(TouchDragError::SelectorNotFound { selector }));
+                    return;
+                }
+            };
+            validate_touch_drag_widget(&widget, &selector, hold_ms, offsets, release)
+        }
+        (None, Some(center)) => validate_touch_drag(&window, center, hold_ms, offsets, release),
+        _ => {
+            let _ = reply.send(Err(TouchDragError::InvalidTarget {
                 reason: "exactly one of selector / xy required",
             }));
             return;

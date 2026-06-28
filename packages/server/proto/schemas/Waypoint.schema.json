@@ -1,0 +1,21 @@
+{
+  "$comment": "AUTO-GENERATED FROM packages/server/src/proto.rs — do not edit by hand",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "description": "One waypoint of a `POST /test/touch-drag` path (issue #13).\n\n`dx` / `dy` are pixel offsets **from the drag start point** (not from the previous waypoint), matching `gtk::GestureDrag`'s `drag-update` offset semantics so wedge / direction logic that reads the cumulative offset sees exactly these values. A single waypoint `{dx: 0, dy: -120}` drags 120 px up.\n\n`Eq` is intentionally omitted: `f64` is not `Eq` (parity with `PinchRequest`).",
+  "properties": {
+    "dx": {
+      "format": "double",
+      "type": "number"
+    },
+    "dy": {
+      "format": "double",
+      "type": "number"
+    }
+  },
+  "required": [
+    "dx",
+    "dy"
+  ],
+  "title": "Waypoint",
+  "type": "object"
+}

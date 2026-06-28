@@ -40,6 +40,7 @@ Each capability is advertised in `GET /test/info` and exposed both as an HTTP/We
 | `pinch`      | `POST /test/pinch`      | `pinch <x,y> <scale>`        | Drive a `GestureZoom` (zoom in/out) |
 | `press`      | `POST /test/press`      | `press <selector\|x,y> <hold_ms>` | Fire a `GestureLongPress` (press→hold→release) |
 | `key`        | `POST /test/key`        | `key <name>`                 | Press a key (MVP: `Escape` → `popdown()` the topmost open popover; safe way to dismiss a modal/autohide dialog without wedging `tap`) |
+| `touch_drag` | `POST /test/touch-drag` | `touch-drag <selector\|x,y> <hold_ms> [--waypoints '<json>'] [--no-release]` | Held touch sequence (press-hold → drag through waypoints → release) as one `GtkGestureDrag`, for custom radial / pie menus |
 | `screenshot` | `GET /test/screenshot`  | `screenshot <out\|--baseline> [--selector\|--window]` | Capture the active window — or a `--selector` widget / `--window` toplevel (non-active窓・popover も撮れる) — as PNG / visual-regression diff |
 | `elements`   | `GET /test/elements`    | `elements [--selector …]`    | Walk the widget tree (+ opt-in GObject property read) |
 | `wait`       | `POST /test/wait`       | `wait visible\|state-eq\|app-state-eq` | Long-poll until a condition holds |

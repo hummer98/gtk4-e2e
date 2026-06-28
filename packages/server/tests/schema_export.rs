@@ -105,7 +105,8 @@ fn capability_enum_order_is_anchored() {
     // issue #3 appends Focus for `POST /test/focus`; Task 029 (T029) appends
     // Press for `POST /test/press`; SetValue appends `POST /test/set-value`
     // (GtkRange / GtkScale); Key (issue #10) appends `POST /test/key`
-    // (Escape → popdown) at the tail.
+    // (Escape → popdown); TouchDrag (issue #13) appends `POST /test/touch-drag`
+    // (held GtkGestureDrag sequence) at the tail.
     let tmp = tempfile::tempdir().unwrap();
     write_schemas(tmp.path()).unwrap();
 
@@ -133,8 +134,9 @@ fn capability_enum_order_is_anchored() {
             "press",
             "set_value",
             "key",
+            "touch_drag",
         ],
-        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements, state, pinch, focus, press, set_value, key]"
+        "Capability enum order must be [info, tap, wait, screenshot, events, type, swipe, elements, state, pinch, focus, press, set_value, key, touch_drag]"
     );
 }
 
