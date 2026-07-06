@@ -538,8 +538,11 @@ impl WidgetLike for crate::gtk::Widget {
     fn read_property_as_json(&self, property: &str) -> Result<Value, PropReadError> {
         // GObject property lookup. The pspec discovery makes this safe: if the
         // widget exposes no such property we return Missing (tick failure),
-        // and if its type is outside our MVP support we return Unsupported
-        // (permanent 422). Plan §Q6: MVP types = String, bool, i32, f64.
+        // and if its type is outside our supported set we return Unsupported
+        // (permanent 422). Plan §Q6 MVP types = String, bool, i32, f64;
+        // issue #17 extends this with GEnum (nick string) and GFlags
+        // (array of nick strings) so enum-typed properties like
+        // `wrap-mode` / `vscrollbar-policy` stop surfacing as sentinels.
         let pspec = match self.find_property(property) {
             Some(p) => p,
             None => return Err(PropReadError::Missing),
@@ -559,6 +562,16 @@ impl WidgetLike for crate::gtk::Widget {
             return serde_json::Number::from_f64(f)
                 .map(Value::Number)
                 .ok_or(PropReadError::Unsupported(type_name));
+        }
+        if let Some((_class, ev)) = crate::gtk::glib::EnumValue::from_value(&v) {
+            return Ok(Value::String(ev.nick().to_string()));
+        }
+        if let Some((_class, fvs)) = crate::gtk::glib::FlagsValue::from_value(&v) {
+            return Ok(Value::Array(
+                fvs.iter()
+                    .map(|f| Value::String(f.nick().to_string()))
+                    .collect(),
+            ));
         }
         Err(PropReadError::Unsupported(type_name))
     }

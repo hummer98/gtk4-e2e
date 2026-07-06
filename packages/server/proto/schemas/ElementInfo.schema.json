@@ -31,7 +31,7 @@
       "type": "object"
     },
     "ElementInfo": {
-      "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets. An **open** popover (and its children) carries real synthesized bounds; a closed / unrealized popover stays `None` (see `Bounds` for the coordinate synthesis).\n\n`properties` is populated only when the caller asks for it via the `props=` query parameter on `GET /test/elements` (opt-in; absent in the response when empty). Each entry maps the requested GObject property name to its current value, JSON-encoded by `wait::read_property_as_json` (MVP types: String, bool, i32, f64). Sentinels are used for failure modes so the response stays a flat JSON object instead of a tagged union:\n\n- `{\"$missing\": true}` — widget exposes no such property. - `{\"$unsupported\": \"GTypeName\"}` — property exists but its value type is outside the MVP set.\n\nThese sentinels are stable wire contract; SDKs may decode them into a richer typed result. Key ordering is deterministic (BTreeMap).",
+      "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets. An **open** popover (and its children) carries real synthesized bounds; a closed / unrealized popover stays `None` (see `Bounds` for the coordinate synthesis).\n\n`text` carries the human-visible text of text-bearing widgets (issue #17): `GtkLabel` (displayed text), `GtkEditable` implementors such as `GtkEntry` (current content), and `GtkTextView` (full buffer content, hidden characters excluded). `None` — and absent on the wire — for every other widget kind, so existing consumers are unaffected.\n\n`properties` is populated only when the caller asks for it via the `props=` query parameter on `GET /test/elements` (opt-in; absent in the response when empty). Each entry maps the requested GObject property name to its current value, JSON-encoded by `wait::read_property_as_json`. Supported types: String, bool, i32, f64 (MVP set), plus GEnum values as their nick string (e.g. `\"wrap-mode\": \"word-char\"`) and GFlags values as an array of nick strings (issue #17). Sentinels are used for failure modes so the response stays a flat JSON object instead of a tagged union:\n\n- `{\"$missing\": true}` — widget exposes no such property. - `{\"$unsupported\": \"GTypeName\"}` — property exists but its value type is outside the supported set (e.g. boxed types like GdkRGBA).\n\nThese sentinels are stable wire contract; SDKs may decode them into a richer typed result. Key ordering is deterministic (BTreeMap).",
       "properties": {
         "bounds": {
           "anyOf": [
@@ -71,6 +71,12 @@
         "sensitive": {
           "type": "boolean"
         },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "visible": {
           "type": "boolean"
         },
@@ -90,7 +96,7 @@
       "type": "object"
     }
   },
-  "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets. An **open** popover (and its children) carries real synthesized bounds; a closed / unrealized popover stays `None` (see `Bounds` for the coordinate synthesis).\n\n`properties` is populated only when the caller asks for it via the `props=` query parameter on `GET /test/elements` (opt-in; absent in the response when empty). Each entry maps the requested GObject property name to its current value, JSON-encoded by `wait::read_property_as_json` (MVP types: String, bool, i32, f64). Sentinels are used for failure modes so the response stays a flat JSON object instead of a tagged union:\n\n- `{\"$missing\": true}` — widget exposes no such property. - `{\"$unsupported\": \"GTypeName\"}` — property exists but its value type is outside the MVP set.\n\nThese sentinels are stable wire contract; SDKs may decode them into a richer typed result. Key ordering is deterministic (BTreeMap).",
+  "description": "One node of the widget tree returned by `GET /test/elements`.\n\n`id` is a process-stable DFS pre-order index of the form `\"e0\"`, `\"e1\"`, ... assigned during a single walk. It is **not** stable across walks or app restarts — selectors (`#name` / `.class`) are the primary refer mechanism. `id` exists for response triage / log lines where a temporary handle is enough.\n\n`widget_name` mirrors `widget.widget_name()`. Empty strings are normalised to `None` (matches `tree::GtkTree::name()` semantics — tree.rs:169-176).\n\n`bounds` is `None` for unrealized / unmapped widgets. An **open** popover (and its children) carries real synthesized bounds; a closed / unrealized popover stays `None` (see `Bounds` for the coordinate synthesis).\n\n`text` carries the human-visible text of text-bearing widgets (issue #17): `GtkLabel` (displayed text), `GtkEditable` implementors such as `GtkEntry` (current content), and `GtkTextView` (full buffer content, hidden characters excluded). `None` — and absent on the wire — for every other widget kind, so existing consumers are unaffected.\n\n`properties` is populated only when the caller asks for it via the `props=` query parameter on `GET /test/elements` (opt-in; absent in the response when empty). Each entry maps the requested GObject property name to its current value, JSON-encoded by `wait::read_property_as_json`. Supported types: String, bool, i32, f64 (MVP set), plus GEnum values as their nick string (e.g. `\"wrap-mode\": \"word-char\"`) and GFlags values as an array of nick strings (issue #17). Sentinels are used for failure modes so the response stays a flat JSON object instead of a tagged union:\n\n- `{\"$missing\": true}` — widget exposes no such property. - `{\"$unsupported\": \"GTypeName\"}` — property exists but its value type is outside the supported set (e.g. boxed types like GdkRGBA).\n\nThese sentinels are stable wire contract; SDKs may decode them into a richer typed result. Key ordering is deterministic (BTreeMap).",
   "properties": {
     "bounds": {
       "anyOf": [
@@ -129,6 +135,12 @@
     },
     "sensitive": {
       "type": "boolean"
+    },
+    "text": {
+      "type": [
+        "string",
+        "null"
+      ]
     },
     "visible": {
       "type": "boolean"

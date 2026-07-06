@@ -239,6 +239,7 @@ fn to_element_info(
         .collect();
     let visible = widget.is_visible();
     let sensitive = widget.is_sensitive();
+    let text = widget_display_text(widget);
 
     // Bounds decision — 4 independent branches (plan §1.1). The popover-root
     // test (branch 2) is evaluated independently of `popover_origin`: a popover
@@ -331,10 +332,42 @@ fn to_element_info(
         css_classes,
         visible,
         sensitive,
+        text,
         bounds,
         properties,
         children,
     }
+}
+
+/// Human-visible text for text-bearing widgets (issue #17), or `None` for
+/// widgets that carry no display text (the field then stays off the wire).
+///
+/// Covered widgets:
+/// - `GtkLabel` — `label.text()`, i.e. the displayed string after mnemonic /
+///   markup processing.
+/// - `GtkEditable` implementors (`GtkEntry`, `GtkText`, `GtkSearchEntry`,
+///   `GtkSpinButton`, ...) — the current editable content.
+/// - `GtkTextView` — the full buffer content between start and end iters,
+///   excluding hidden (invisible-tagged) characters.
+///
+/// The `GtkLabel` arm runs first only for clarity; the three widget classes
+/// are disjoint so the order does not change the result.
+fn widget_display_text(widget: &gtk::Widget) -> Option<String> {
+    if let Some(label) = widget.dynamic_cast_ref::<gtk::Label>() {
+        return Some(label.text().to_string());
+    }
+    if let Some(editable) = widget.dynamic_cast_ref::<gtk::Editable>() {
+        return Some(editable.text().to_string());
+    }
+    if let Some(view) = widget.dynamic_cast_ref::<gtk::TextView>() {
+        let buffer = view.buffer();
+        return Some(
+            buffer
+                .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Build the per-node `properties` map for an opt-in `props=` request.

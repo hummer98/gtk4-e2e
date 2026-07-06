@@ -341,8 +341,9 @@ pub enum EventKind {
 /// }
 /// ```
 ///
-/// `value` follows the same MVP typing as `ElementInfo.properties`: String /
-/// bool / i32 / f64, with the `{"$unsupported": "GTypeName"}` sentinel for
+/// `value` follows the same typing as `ElementInfo.properties`: String /
+/// bool / i32 / f64, GEnum as nick string, GFlags as array of nick strings,
+/// with the `{"$unsupported": "GTypeName"}` sentinel for
 /// property types outside that set. Missing properties cannot occur here
 /// (notify only fires for properties the widget actually exposes), so there
 /// is no `$missing` sentinel.
@@ -408,17 +409,26 @@ pub struct Bounds {
 /// (and its children) carries real synthesized bounds; a closed / unrealized
 /// popover stays `None` (see `Bounds` for the coordinate synthesis).
 ///
+/// `text` carries the human-visible text of text-bearing widgets
+/// (issue #17): `GtkLabel` (displayed text), `GtkEditable` implementors
+/// such as `GtkEntry` (current content), and `GtkTextView` (full buffer
+/// content, hidden characters excluded). `None` — and absent on the
+/// wire — for every other widget kind, so existing consumers are
+/// unaffected.
+///
 /// `properties` is populated only when the caller asks for it via the
 /// `props=` query parameter on `GET /test/elements` (opt-in; absent in
 /// the response when empty). Each entry maps the requested GObject
 /// property name to its current value, JSON-encoded by
-/// `wait::read_property_as_json` (MVP types: String, bool, i32, f64).
-/// Sentinels are used for failure modes so the response stays a
-/// flat JSON object instead of a tagged union:
+/// `wait::read_property_as_json`. Supported types: String, bool, i32,
+/// f64 (MVP set), plus GEnum values as their nick string (e.g.
+/// `"wrap-mode": "word-char"`) and GFlags values as an array of nick
+/// strings (issue #17). Sentinels are used for failure modes so the
+/// response stays a flat JSON object instead of a tagged union:
 ///
 /// - `{"$missing": true}` — widget exposes no such property.
 /// - `{"$unsupported": "GTypeName"}` — property exists but its value
-///   type is outside the MVP set.
+///   type is outside the supported set (e.g. boxed types like GdkRGBA).
 ///
 /// These sentinels are stable wire contract; SDKs may decode them into
 /// a richer typed result. Key ordering is deterministic (BTreeMap).
@@ -432,6 +442,8 @@ pub struct ElementInfo {
     pub css_classes: Vec<String>,
     pub visible: bool,
     pub sensitive: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bounds: Option<Bounds>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
