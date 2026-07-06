@@ -125,6 +125,57 @@ describe.skipIf(!haveDisplay)("scenarios/elements", () => {
     }
   }, 30_000);
 
+  test("text field carries display text for Label / Entry (issue #17)", async () => {
+    // Text-bearing widgets expose their human-visible text as a stable
+    // `text` field without opting into props=; other widgets omit it.
+    const { client, teardown } = await spawnDemo();
+    try {
+      await waitForEntryVisible(client);
+
+      const entry = await client.elements({ selector: "#entry1", maxDepth: 0 });
+      expect(entry.roots[0].text).toBe("hello"); // demo's initial Entry text
+
+      const label = await client.elements({ selector: "#label1", maxDepth: 0 });
+      expect(label.roots[0].text).toBe("waiting..."); // initial Label text
+
+      // Non-text widgets (the ApplicationWindow root) carry no text field.
+      const win = await client.elements({ maxDepth: 0 });
+      expect(win.roots[0].kind).toBe("GtkApplicationWindow");
+      expect(win.roots[0].text ?? null).toBeNull();
+    } finally {
+      await teardown();
+    }
+  }, 30_000);
+
+  test("props= stringifies GEnum / GFlags values (issue #17)", async () => {
+    // GEnum properties serialize as their nick string, GFlags as an array
+    // of nick strings; boxed types keep the $unsupported sentinel.
+    const { client, teardown } = await spawnDemo();
+    try {
+      await waitForEntryVisible(client);
+
+      const sw = await client.elements({
+        selector: "#scroll1",
+        props: ["vscrollbar-policy"],
+        maxDepth: 0,
+      });
+      const swMap = sw.roots[0].properties as Record<string, unknown>;
+      expect(swMap["vscrollbar-policy"]).toBe("automatic");
+
+      const entry = await client.elements({
+        selector: "#entry1",
+        props: ["input-purpose", "input-hints", "attributes"],
+        maxDepth: 0,
+      });
+      const map = entry.roots[0].properties as Record<string, unknown>;
+      expect(map["input-purpose"]).toBe("free-form"); // GEnum → nick
+      expect(Array.isArray(map["input-hints"])).toBe(true); // GFlags → array
+      expect(map.attributes).toEqual({ $unsupported: "PangoAttrList" }); // boxed stays sentinel
+    } finally {
+      await teardown();
+    }
+  }, 30_000);
+
   test("props=['*'] enumerates every readable GObject property", async () => {
     // Wildcard expansion at the server side: every GObject property
     // advertised by the matched widget's class shows up in `properties`,

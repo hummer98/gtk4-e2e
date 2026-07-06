@@ -163,16 +163,32 @@ bunx gtk4-e2e elements --selector "#entry1" --props text,placeholder-text
 bunx gtk4-e2e elements --selector "#entry1" --props '*'
 ```
 
-`--props` で取れる値の型は MVP で `String / bool / i32 / f64`。それ以外
-(`GdkRGBA` 等 boxed や enum / flags) は `{"$unsupported": "GTypeName"}`、
+テキストを持つ widget (`GtkLabel` / `GtkEntry` 等の `GtkEditable` 実装 /
+`GtkTextView`) は、`--props` 無しでも各ノードに表示テキストが `text`
+フィールドとして載る。screenshot 目視に頼らず本文の regression を JSON
+だけで検証できる。
+
+```bash
+# 例: TextView 本文に "user_question" が表示されていることを確認
+bunx gtk4-e2e elements --selector ".dialog-body" \
+  | jq -e '.roots[0].text | contains("user_question")'
+```
+
+`--props` で取れる値の型は `String / bool / i32 / f64`、enum (GEnum) は
+nick 文字列 (例 `"wrap-mode": "word-char"`)、flags (GFlags) は nick 文字列の
+配列。それ以外 (`GdkRGBA` 等 boxed) は `{"$unsupported": "GTypeName"}`、
 そもそも widget が公開していない property は `{"$missing": true}` という
 sentinel で返るので、`jq` で振り分けられる。GTK4 が public API を持たない
-CSS computed style と state flags は取れない (`css_classes` までは出る)。
+CSS computed style は取れない (`css_classes` までは出る)。
 
 ```bash
 # 例: Entry.text が "" でないことを確認
 bunx gtk4-e2e elements --selector "#entry1" --props text \
   | jq -e '.roots[0].properties.text != ""'
+
+# 例: スクロール可能な read-only TextView であることを確認
+bunx gtk4-e2e elements --selector "#sw1" --props vscrollbar-policy \
+  | jq -e '.roots[0].properties["vscrollbar-policy"] == "automatic"'
 ```
 
 ### wait (条件が整うまで long-poll)

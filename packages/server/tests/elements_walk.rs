@@ -305,6 +305,179 @@ fn props_wildcard_enumerates_readable_gobject_properties() {
     common::pump_glib(32);
 }
 
+/// Fixture for issue #17 coverage: window > scrolled(#sw1) > textview(#tv1)
+/// with a read-only, word-char-wrapped TextView holding multi-line text —
+/// mirrors the Helva "表示根拠" dialog shape the issue verified against.
+fn build_text_fixture() -> (gtk::Application, gtk::ApplicationWindow) {
+    let app = gtk::Application::builder()
+        .application_id("dev.gtk4-e2e.elements-text-test")
+        .build();
+    let _ = app.register(None::<&gtk::gio::Cancellable>);
+
+    let view = gtk::TextView::builder()
+        .wrap_mode(gtk::WrapMode::WordChar)
+        .editable(false)
+        .input_hints(gtk::InputHints::NO_SPELLCHECK | gtk::InputHints::LOWERCASE)
+        .build();
+    view.set_widget_name("tv1");
+    view.buffer()
+        .set_text("プロンプト\nuser_question:\n海の様子は？");
+
+    let scrolled = gtk::ScrolledWindow::builder().child(&view).build();
+    scrolled.set_widget_name("sw1");
+    scrolled.set_policy(gtk::PolicyType::Never, gtk::PolicyType::Automatic);
+
+    let window = gtk::ApplicationWindow::builder()
+        .application(&app)
+        .child(&scrolled)
+        .build();
+    window.present();
+    common::pump_glib(64);
+    (app, window)
+}
+
+#[test]
+fn text_field_reports_label_and_entry_content() {
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_fixture();
+
+    let resp = walk_elements(&app, Some("#label1"), None, &[]).expect("walk should succeed");
+    assert_eq!(
+        resp.roots[0].text.as_deref(),
+        Some("hi"),
+        "GtkLabel must expose its displayed text"
+    );
+
+    // GtkEntry implements GtkEditable — an empty entry still carries
+    // `Some("")` (text-bearing widgets always serialize the field).
+    let resp = walk_elements(&app, Some("#input1"), None, &[]).expect("walk should succeed");
+    assert_eq!(
+        resp.roots[0].text.as_deref(),
+        Some(""),
+        "empty GtkEntry must report empty string, not None"
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn text_field_absent_for_non_text_widgets() {
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_fixture();
+    let resp = walk_elements(&app, None, Some(0), &[]).expect("walk should succeed");
+    assert!(
+        resp.roots[0].text.is_none(),
+        "GtkApplicationWindow carries no display text (got {:?})",
+        resp.roots[0].text
+    );
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn text_field_reports_textview_buffer_content() {
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_text_fixture();
+    let resp = walk_elements(&app, Some("#tv1"), None, &[]).expect("walk should succeed");
+    assert_eq!(
+        resp.roots[0].text.as_deref(),
+        Some("プロンプト\nuser_question:\n海の様子は？"),
+        "GtkTextView must expose the full buffer text"
+    );
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn props_enum_property_returns_nick_string() {
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_text_fixture();
+
+    let props = vec!["wrap-mode".to_string()];
+    let resp = walk_elements(&app, Some("#tv1"), None, &props).expect("walk should succeed");
+    let map = resp.roots[0].properties.as_ref().expect("properties");
+    assert_eq!(
+        map.get("wrap-mode"),
+        Some(&serde_json::Value::String("word-char".to_string())),
+        "GEnum property must serialize as its nick string"
+    );
+
+    let props = vec![
+        "vscrollbar-policy".to_string(),
+        "hscrollbar-policy".to_string(),
+    ];
+    let resp = walk_elements(&app, Some("#sw1"), None, &props).expect("walk should succeed");
+    let map = resp.roots[0].properties.as_ref().expect("properties");
+    assert_eq!(
+        map.get("vscrollbar-policy"),
+        Some(&serde_json::Value::String("automatic".to_string()))
+    );
+    assert_eq!(
+        map.get("hscrollbar-policy"),
+        Some(&serde_json::Value::String("never".to_string()))
+    );
+
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn props_flags_property_returns_nick_string_array() {
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_text_fixture();
+    // `input-hints` (GtkInputHints) is a GFlags property; the fixture sets
+    // NO_SPELLCHECK | LOWERCASE explicitly so the nick array is deterministic.
+    let props = vec!["input-hints".to_string()];
+    let resp = walk_elements(&app, Some("#tv1"), None, &props).expect("walk should succeed");
+    let map = resp.roots[0].properties.as_ref().expect("properties");
+    let entry = map.get("input-hints").expect("entry present");
+    let arr = entry
+        .as_array()
+        .unwrap_or_else(|| panic!("GFlags property must serialize as an array, got {entry:?}"));
+    let nicks: Vec<&str> = arr.iter().filter_map(|v| v.as_str()).collect();
+    assert_eq!(nicks.len(), arr.len(), "flags array must contain strings");
+    for expected in ["no-spellcheck", "lowercase"] {
+        assert!(
+            nicks.contains(&expected),
+            "flags array must contain {expected:?}, got {nicks:?}"
+        );
+    }
+    window.close();
+    common::pump_glib(32);
+}
+
+#[test]
+fn props_boxed_type_keeps_unsupported_sentinel() {
+    if !require_display() {
+        return;
+    }
+    let (app, window) = build_fixture();
+    // `attributes` (PangoAttrList) is a boxed type — still outside the
+    // supported set, so the backward-compatible sentinel must survive the
+    // enum/flags extension (issue #17 acceptance criteria).
+    let props = vec!["attributes".to_string()];
+    let resp = walk_elements(&app, Some("#input1"), None, &props).expect("walk should succeed");
+    let map = resp.roots[0].properties.as_ref().expect("properties");
+    assert_eq!(
+        map.get("attributes"),
+        Some(&serde_json::json!({"$unsupported": "PangoAttrList"})),
+        "boxed types must keep the $unsupported sentinel"
+    );
+    window.close();
+    common::pump_glib(32);
+}
+
 /// DFS helper for `props_reads_string_value_from_entry` — locate a named
 /// widget without going through walk_elements (so the test can prepare
 /// fixture state directly against the GTK object).
