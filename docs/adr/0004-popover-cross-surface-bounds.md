@@ -2,7 +2,7 @@
 
 - **Status**: Accepted
 - **Date**: 2026-07-21 (実装は 2026-06-16 `fe8eba3`、本 ADR は事後記録)
-- **Confidence**: 中 (60%) — 合成式は macOS quartz 実機で数値検証済み (§Verification)。100% にしないのは (a) **X11 / Wayland 上で一度も検証されていない** (§Verification の CI 空白)、(b) HiDPI (scale>1) 未検証、(c) 多段 popover 未対応のため。
+- **Confidence**: 中〜高 (75%) — 合成式は macOS quartz + Linux/xvfb (X11) の 2 backend で数値検証済み、X11 は CI の `scenarios` job で継続検証される (§Verification)。100% にしないのは (a) **Wayland 未検証** (CI は X11、本番 consumer は Wayland/AGX、`surface_transform` の符号は backend 依存)、(b) HiDPI (scale>1) 未検証、(c) 多段 popover 未対応のため。
 
 ## Context
 
@@ -78,11 +78,18 @@ content #popover-confirm x=133 y=908  w=95  h=34   → 中心 x = 180.5
 
 GTK は popover をアンカーに水平センタリングするので、x の符号が反転していれば約 `2*position_x` 横にずれる。**0.5px 一致**により符号は正しいと確認した。popover subtree の実測でも root は content より左右 3px・上 2px 大きいだけで、CSD shadow margin (m2) 由来のずれは観測されなかった。
 
-**CI の空白 (重要)** — Rust 統合テスト `packages/server/tests/elements_popover_bounds.rs` は popup surface を realize しない環境で skip する。これは **headless CI がまさにその環境**であり、CI では常に skip される。demo scenario も存在しない。したがって:
+**CI (xvfb / X11) — 本 ADR と同 PR で追加** — demo に窓上部アンカーの popover fixture (`#bounds-popover-btn` / `#bounds-popover-content`) と scenario `popover-bounds.spec.ts` を追加し、xvfb/X11 の `scenarios` job で **skip せず pass** させた。同じアンカー幾何オラクルでの実測:
 
-> **本実装は X11 / Wayland 上で一度も実行検証されていない。** 検証済みなのは macOS quartz のみである。
+```
+anchor  #bounds-popover-btn     x=12  y=12 w=336 h=34   → 中心 x = 180.0
+content #bounds-popover-content x=136 y=67 w=88  h=17   → 中心 x = 180.0
+```
 
-本番 consumer は Wayland/AGX なので、この空白は実運用上のリスクとして残っている。CI で検証するには**窓上部にアンカーを持つ専用 fixture**が要る — CI の xvfb 画面は 720px 高で demo 窓はそれより高いため、窓下部アンカーの popover は画面外になり map されない (PR #21 の CI fail はこれが原因だった)。fixture 追加は visual-regression baseline の再生成を伴う。
+macOS quartz (中心 x=180.0 / 180.5) と X11 (180.0 / 180.0) の**両 backend で符号・センタリング・アンカー隣接 (gapBelow=21) が一致**した。これで合成式は 2 backend で数値検証済みとなった。
+
+**残る CI の空白** — Rust 統合テスト `packages/server/tests/elements_popover_bounds.rs` は依然 popup surface を realize しない環境で skip する (scenario が代替カバーする)。**Wayland は未検証** — CI は X11 (xvfb) であり、本番 consumer の Wayland/AGX とはコンポジタが異なる。X11 で符号が正しいことは Wayland での正しさを保証しない (surface_transform の符号は backend 依存 §Confidence(c))。consumer 側で実機の値を一度確認することを推奨する。
+
+**この過程で判明した backend 依存の 2 点** — (1) 非 autohide popover は X11 で GdkPopup にならず合成されない (§m7)。(2) `elements({selector})` は X11 で open popover 内の widget を返さない (full-tree walk は返す) — selector 到達性の別問題で issue #20 と近縁。scenario は full-tree walk で回避している。どちらも quartz だけ見ていると気づけなかった差で、CI 化の実利だった。
 
 ## Limitations / 前提
 
