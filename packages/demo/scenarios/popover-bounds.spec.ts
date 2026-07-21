@@ -78,10 +78,17 @@ async function waitRootSettled(
  * frame or two after it maps, so a single read can catch a transient. Failure
  * to find the node or to settle within the deadline throws (→ test FAILS,
  * never a skip).
+ *
+ * Walks the FULL tree (`elements({})`) and finds the node by name rather than
+ * scoping with `elements({selector})`. On X11/xvfb a selector-scoped query does
+ * not return a widget that lives inside an (open) popover surface — the full
+ * unfiltered walk does, and composes its bounds correctly. That selector-vs-
+ * full-walk asymmetry for cross-surface widgets is a separate issue (kin to the
+ * selector-reachability gap tracked in issue #20); this scenario is about the
+ * bounds composition, so it sidesteps it by walking the whole tree.
  */
 async function settledBounds(
   client: Awaited<ReturnType<typeof spawnDemo>>["client"],
-  selector: string,
   name: string,
   timeoutMs: number,
 ): Promise<Bounds> {
@@ -90,13 +97,13 @@ async function settledBounds(
     !!a && !!b && a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
   let prev: Bounds | undefined;
   for (;;) {
-    const resp = await client.elements({ selector });
+    const resp = await client.elements({});
     const cur = findNode(resp.roots, name)?.bounds as Bounds | undefined;
     if (cur && cur.width > 0 && cur.height > 0 && eq(prev, cur)) return cur;
     prev = cur;
     if (Date.now() >= deadline) {
       throw new Error(
-        `bounds for ${selector} did not settle within ${timeoutMs}ms (last=${JSON.stringify(cur)})`,
+        `bounds for ${name} did not settle within ${timeoutMs}ms (last=${JSON.stringify(cur)})`,
       );
     }
     await new Promise((r) => setTimeout(r, 50));
@@ -112,19 +119,14 @@ describe.skipIf(!haveDisplay)("scenarios/popover-bounds", () => {
 
       // Anchor bounds (same surface, ordinary compute_bounds) as an
       // independent geometric reference.
-      const anchor = await settledBounds(
-        client,
-        "#bounds-popover-btn",
-        "bounds-popover-btn",
-        5_000,
-      );
+      const anchor = await settledBounds(client, "bounds-popover-btn", 5_000);
 
       await client.tap("#bounds-popover-btn");
       await waitVisible(client, "#bounds-popover-content", 5_000);
 
       let b: Bounds;
       try {
-        b = await settledBounds(client, "#bounds-popover-content", "bounds-popover-content", 5_000);
+        b = await settledBounds(client, "bounds-popover-content", 5_000);
       } catch (err) {
         // On failure, dump the popover subtree so a CI triage sees whether the
         // node is absent (never mapped) or present with null bounds (the
@@ -180,7 +182,7 @@ describe.skipIf(!haveDisplay)("scenarios/popover-bounds", () => {
       await waitVisible(client, "#entry1", 5_000);
       // Regression: an ordinary widget's bounds are unchanged by the popover
       // composition path.
-      const b = await settledBounds(client, "#entry1", "entry1", 5_000);
+      const b = await settledBounds(client, "entry1", 5_000);
       expect(b.width).toBeGreaterThan(0);
       expect(b.height).toBeGreaterThan(0);
     } finally {
