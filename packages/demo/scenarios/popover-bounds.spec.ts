@@ -122,12 +122,27 @@ describe.skipIf(!haveDisplay)("scenarios/popover-bounds", () => {
       await client.tap("#bounds-popover-btn");
       await waitVisible(client, "#bounds-popover-content", 5_000);
 
-      const b = await settledBounds(
-        client,
-        "#bounds-popover-content",
-        "bounds-popover-content",
-        5_000,
-      );
+      let b: Bounds;
+      try {
+        b = await settledBounds(client, "#bounds-popover-content", "bounds-popover-content", 5_000);
+      } catch (err) {
+        // On failure, dump the popover subtree so a CI triage sees whether the
+        // node is absent (never mapped) or present with null bounds (the
+        // composition declined on this backend).
+        const full = await client.elements({});
+        const dump = (n: ElementInfo, d: number): string =>
+          [
+            `${"  ".repeat(d)}${n.kind} ${n.widget_name ?? "-"} ${JSON.stringify(n.bounds ?? null)}`,
+            ...(n.children ?? []).map((c) => dump(c, d + 1)),
+          ].join("\n");
+        const node = findNode(full.roots, "bounds-popover-content");
+        console.log(
+          `[popover][diag] bounds-popover-content in tree: ${node ? "YES" : "NO"}` +
+            (node ? ` bounds=${JSON.stringify(node.bounds ?? null)}` : ""),
+        );
+        console.log(`[popover][diag] tree:\n${full.roots.map((r) => dump(r, 0)).join("\n")}`);
+        throw err;
+      }
 
       // Numeric, non-degenerate bounds (the composition produced a rect).
       expect(Number.isFinite(b.x) && Number.isFinite(b.y)).toBe(true);

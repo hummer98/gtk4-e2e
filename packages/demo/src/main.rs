@@ -496,21 +496,28 @@ fn build_ui(
         });
     }
 
-    // ADR-0004: a non-autohide Popover anchored near the *top* of the window so
+    // ADR-0004: a Popover anchored near the *top* of the window so
     // `GET /test/elements`'s cross-surface bounds composition can be verified in
     // CI. It must be top-anchored: the demo window is taller than the CI xvfb
     // screen (720px), so a bottom-anchored popover (e.g. `#open-popover` above)
     // would open off-screen and never map, leaving the composition path
     // uncovered. Plain Button (not MenuButton) so a scenario can
-    // `tap("#bounds-popover-btn")` to open it. Autohide is off so the tap that
-    // reads bounds does not dismiss it. Starts closed, so it is absent from the
-    // visual-regression baseline frame — but its trigger button shifts the
-    // layout, hence the baseline is regenerated alongside this change.
+    // `tap("#bounds-popover-btn")` to open it; the scenario only taps once (to
+    // open) and then reads bounds over HTTP, so the modal grab never dismisses.
+    //
+    // Autohide is left ON (the default). A non-autohide popover did NOT yield
+    // composed bounds under xvfb/X11 — its surface is not realized as a
+    // GdkPopup, so `popover_root_frame` returns None and `bounds` comes back
+    // null (it composed fine on macOS/quartz, masking the gap). A modal popover
+    // is realized as a proper popup surface on both backends. See ADR-0004 m7.
+    //
+    // Starts closed, so it is absent from the visual-regression baseline frame —
+    // but its trigger button shifts the layout, hence the baseline is
+    // regenerated alongside this change.
     let bounds_popover_label = Label::new(Some("bounds probe"));
     bounds_popover_label.set_widget_name("bounds-popover-content");
     let bounds_popover = gtk4::Popover::builder()
         .child(&bounds_popover_label)
-        .autohide(false)
         .build();
     bounds_popover.set_widget_name("bounds-popover");
     let bounds_popover_btn = Button::with_label("Bounds probe");
