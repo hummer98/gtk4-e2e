@@ -80,12 +80,12 @@ async function waitRootSettled(
  * never a skip).
  *
  * Walks the FULL tree (`elements({})`) and finds the node by name rather than
- * scoping with `elements({selector})`. On X11/xvfb a selector-scoped query does
- * not return a widget that lives inside an (open) popover surface — the full
- * unfiltered walk does, and composes its bounds correctly. That selector-vs-
- * full-walk asymmetry for cross-surface widgets is a separate issue (kin to the
- * selector-reachability gap tracked in issue #20); this scenario is about the
- * bounds composition, so it sidesteps it by walking the whole tree.
+ * scoping with `elements({selector})`. On X11/xvfb a selector-scoped query
+ * returns a widget that lives inside an open popover but with `bounds` null:
+ * the selector path starts the matched widget with no popover frame, so its
+ * cross-surface bounds are not composed (issue #23). The full unfiltered walk
+ * composes them correctly. This scenario is about the bounds composition, so it
+ * sidesteps that bug by walking the whole tree.
  */
 async function settledBounds(
   client: Awaited<ReturnType<typeof spawnDemo>>["client"],
